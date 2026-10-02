@@ -5,3 +5,8 @@
 next-env.d.ts
 *.tsbuildinfo
 .env*.local
+/data/settings.json
+/data/catalog.json
+/data/shopify-cache.json
+/data/shopify-sync-status.json
+/data/*.tmp

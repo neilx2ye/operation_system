@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DataTable, downloadCsv, filterRows, sortRows, toCsv, type Column, type Sort } from '@/components/DataTable';
 import { MiniTable } from '@/components/Sparkline';
+import { ShipCard } from '@/components/ShipCard';
 import { int, money } from '@/lib/format';
 import type { OrderDetail, OrderRow } from '@/lib/mock';
 
@@ -30,7 +31,6 @@ export function OrdersView() {
   const [sort, setSort] = useState<Sort>({ key: 'date', dir: -1 });
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
-
   useEffect(() => {
     let alive = true;
     fetch('/api/orders')
@@ -121,6 +121,42 @@ export function OrdersView() {
           </div>
           <div className="muted">
             订单金额 {money(detail.gross)} · 退款 {money(detail.refunded)} · 净额 {money(detail.net)} · 毛利 {money(detail.profit)}
+          </div>
+          <ShipCard detail={detail} />
+          <h4>客户信息</h4>
+          <MiniTable
+            rows={[detail.customer]}
+            columns={[
+              { label: '姓名', value: (c) => c.name },
+              { label: '邮箱', value: (c) => c.email },
+              { label: '电话', value: (c) => c.phone },
+              { label: '国家', value: (c) => c.country },
+              { label: '渠道', value: (c) => c.source },
+              { label: '累计订单', numeric: true, value: (c) => c.orders },
+              { label: 'LTV', numeric: true, value: (c) => money(c.ltv) },
+              { label: '首单', value: (c) => c.firstOrder ?? '-' },
+            ]}
+          />
+          <h4>收货地址</h4>
+          <div className="addr">
+            <div>
+              <b>{detail.shipping.name}</b> · {detail.shipping.phone}
+            </div>
+            <div>{detail.shipping.line1}</div>
+            {detail.shipping.line2 && <div>{detail.shipping.line2}</div>}
+            <div>
+              {detail.shipping.city}, {detail.shipping.state} {detail.shipping.zip}
+            </div>
+            <div>{detail.shipping.country}</div>
+            <button
+              onClick={() => {
+                const s = detail.shipping;
+                const text = [s.name + ' ' + s.phone, s.line1, s.line2, s.city + ', ' + s.state + ' ' + s.zip, s.country].filter(Boolean).join('\n');
+                navigator.clipboard?.writeText(text);
+              }}
+            >
+              复制地址
+            </button>
           </div>
           <h4>商品明细</h4>
           <MiniTable

@@ -54,7 +54,7 @@ export function BarCell({ value, max, text, color }: { value: number; max: numbe
   const w = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
   return (
     <div className="bar-cell">
-      <div className="bar-fill" style={{ width: w + '%', background: color }} />
+      <div className="bar-fill" style={{ width: w + '%', ...(color ? { background: color, opacity: 0.22 } : {}) }} />
       <span>{text}</span>
     </div>
   );

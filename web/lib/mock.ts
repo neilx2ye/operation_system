@@ -4,6 +4,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+type CachedCustomer = Customer & { name?: string; phone?: string };
+type CachedOrder = Order & {
+  shipping?: { name: string; phone: string; line1: string; line2: string; city: string; state: string; zip: string; country: string };
+};
+type ShopifyCache = { products: Product[]; customers: CachedCustomer[]; orders: CachedOrder[]; abandons: Abandon[] };
+const SHOPIFY_CACHE_FILE = path.join(process.cwd(), 'data', 'shopify-cache.json');
+
 const DAY = 86_400_000;
 
 function rng(seed: number) {
@@ -35,6 +42,8 @@ export type Product = {
   variant: string;
   /** SKU 编码 */
   sku: string;
+  /** 单件重量(克),0 表示未填写;推云途订单时按 数量 × 单件重量 汇总包裹重量 */
+  weightG: number;
   /** 当前库存件数 */
   stock: number;
   /** 补货点：库存 ≤ 该值时提示补货 */
@@ -112,7 +121,7 @@ const PRODUCT_DEFS: [string, string, string, number, number, number, number][] =
   ['Cold Brew Pitcher', '', 'Coffee', 31, 12, 0.07, 2],
 ];
 
-export const PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
+const MOCK_PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
   id: 'p' + (i + 1),
   title: d[1] ? d[0] + ' - ' + d[1] : d[0],
   spu: d[0],
@@ -123,6 +132,7 @@ export const PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
   refundProb: d[5],
   pop: d[6],
   sku: 'OPS-' + String(i + 1).padStart(3, '0'),
+  weightG: 0,
   stock: (i * 53 + 17) % 170,
   reorderPoint: 30,
   leadTimeDays: 14 + (i % 3) * 7,
@@ -130,9 +140,23 @@ export const PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
   status: 'active' as ProductStatus,
 }));
 
+function loadShopifyCache(): ShopifyCache | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SHOPIFY_CACHE_FILE, 'utf8'));
+    if (!Array.isArray(raw?.products) || !Array.isArray(raw?.customers) || !Array.isArray(raw?.orders) || !Array.isArray(raw?.abandons)) return null;
+    return raw as ShopifyCache;
+  } catch {
+    return null;
+  }
+}
+
+const shopifyCache = loadShopifyCache();
+export const DATA_SOURCE = shopifyCache ? 'shopify' : 'mock';
+export const PRODUCTS: Product[] = shopifyCache?.products || MOCK_PRODUCTS;
+
 // ---------- 产品目录（可编辑参数，持久化到 data/catalog.json，文件为准） ----------
 
-export const CATALOG_FIELDS = ['sku', 'spu', 'variant', 'category', 'price', 'cost', 'stock', 'reorderPoint', 'leadTimeDays', 'supplier', 'status'] as const;
+export const CATALOG_FIELDS = ['sku', 'spu', 'variant', 'category', 'price', 'cost', 'weightG', 'stock', 'reorderPoint', 'leadTimeDays', 'supplier', 'status'] as const;
 export type CatalogField = (typeof CATALOG_FIELDS)[number];
 export type CatalogPatch = Partial<Pick<Product, CatalogField>>;
 export type CatalogRow = Pick<Product, 'id' | 'title' | CatalogField>;
@@ -147,6 +171,7 @@ const pickFields = (p: Product): Required<CatalogPatch> => ({
   category: p.category,
   price: p.price,
   cost: p.cost,
+  weightG: p.weightG,
   stock: p.stock,
   reorderPoint: p.reorderPoint,
   leadTimeDays: p.leadTimeDays,
@@ -178,6 +203,8 @@ function sanitize(raw: Record<string, unknown>): CatalogPatch {
   if (price !== undefined) out.price = price;
   const cost = num(raw.cost);
   if (cost !== undefined) out.cost = cost;
+  const weightG = num(raw.weightG, true);
+  if (weightG !== undefined) out.weightG = weightG;
   const stock = num(raw.stock, true);
   if (stock !== undefined) out.stock = stock;
   const reorderPoint = num(raw.reorderPoint, true);
@@ -254,19 +281,20 @@ const SOURCES = ['google', 'google', 'meta', 'meta', 'tiktok', 'organic', 'email
 
 const pick = <T,>(a: readonly T[]): T => a[Math.floor(rand() * a.length)];
 
-export const CUSTOMERS: Customer[] = Array.from({ length: 150 }, (_, i) => ({
+const MOCK_CUSTOMERS: Customer[] = Array.from({ length: 150 }, (_, i) => ({
   id: 'c' + (i + 1),
   email: 'user' + (i + 1) + '@example.com',
   country: pick(COUNTRIES),
   source: pick(SOURCES),
 }));
+export const CUSTOMERS: Customer[] = shopifyCache?.customers || MOCK_CUSTOMERS;
 
 const weightedPool: number[] = [];
 PRODUCTS.forEach((p, i) => {
   for (let k = 0; k < p.pop; k++) weightedPool.push(i);
 });
 
-const ORDERS: Order[] = [];
+const MOCK_ORDERS: Order[] = [];
 CUSTOMERS.forEach((c) => {
   const n = 1 + (rand() < 0.3 ? 1 + Math.floor(rand() * 3) : 0);
   let t = NOW - Math.floor(rand() * 170) * DAY - Math.floor(rand() * DAY);
@@ -284,24 +312,25 @@ CUSTOMERS.forEach((c) => {
       const refundAt = refunded ? Math.min(NOW, t + (3 + Math.floor(rand() * 12)) * DAY) : null;
       return { productId: p.id, qty, price: p.price, refunded, refundAt };
     });
-    ORDERS.push({ id: '', customerId: c.id, t, items });
+    MOCK_ORDERS.push({ id: '', customerId: c.id, t, items });
     t += (10 + Math.floor(rand() * 50)) * DAY;
   }
 });
-ORDERS.sort((a, b) => a.t - b.t);
-ORDERS.forEach((o, i) => {
+MOCK_ORDERS.sort((a, b) => a.t - b.t);
+MOCK_ORDERS.forEach((o, i) => {
   o.id = '#' + (1001 + i);
 });
 
 // 弃购：LEADS 是只弃购、从未下单的潜在用户；老客也可能有弃购记录（不影响上面已生成的订单数据）
-const LEADS: Customer[] = Array.from({ length: 45 }, (_, i) => ({
+const MOCK_LEADS: Customer[] = Array.from({ length: 45 }, (_, i) => ({
   id: 'l' + (i + 1),
   email: 'lead' + (i + 1) + '@example.com',
   country: pick(COUNTRIES),
   source: pick(SOURCES),
 }));
-const ALL_CUSTOMERS: Customer[] = [...CUSTOMERS, ...LEADS];
-const ABANDONS: Abandon[] = [];
+const LEADS: Customer[] = shopifyCache ? [] : MOCK_LEADS;
+const ALL_CUSTOMERS: Customer[] = shopifyCache?.customers || [...CUSTOMERS, ...LEADS];
+const MOCK_ABANDONS: Abandon[] = [];
 
 function makeAbandon(customerId: string, t: number) {
   const first = pick(weightedPool);
@@ -311,17 +340,20 @@ function makeAbandon(customerId: string, t: number) {
     if (second !== first) items.push({ productId: PRODUCTS[second].id, qty: 1 });
   }
   const value = items.reduce((s, it) => s + it.qty * PRODUCTS[Number(it.productId.slice(1)) - 1].price, 0);
-  ABANDONS.push({ customerId, t, value, items });
+  MOCK_ABANDONS.push({ customerId, t, value, items });
 }
 
-LEADS.forEach((l) => {
+MOCK_LEADS.forEach((l) => {
   const n = rand() < 0.3 ? 2 : 1;
   for (let k = 0; k < n; k++) makeAbandon(l.id, NOW - Math.floor(rand() * 60) * DAY - Math.floor(rand() * DAY));
 });
-CUSTOMERS.forEach((c) => {
+MOCK_CUSTOMERS.forEach((c) => {
   if (rand() < 0.2) makeAbandon(c.id, NOW - Math.floor(rand() * 120) * DAY - Math.floor(rand() * DAY));
 });
-ABANDONS.sort((a, b) => a.t - b.t);
+MOCK_ABANDONS.sort((a, b) => a.t - b.t);
+
+const ORDERS: CachedOrder[] = shopifyCache?.orders || MOCK_ORDERS;
+const ABANDONS: Abandon[] = shopifyCache?.abandons || MOCK_ABANDONS;
 
 // ---------- 聚合 ----------
 
@@ -712,7 +744,9 @@ export type OrderRow = {
 
 export type OrderDetail = OrderRow & {
   profit: number;
-  lines: { product: string; sku: string; qty: number; price: number; amount: number; refunded: boolean; refundDate: string | null }[];
+  customer: { id: string; name: string; email: string; phone: string; country: string; source: string; orders: number; ltv: number; firstOrder: string | null };
+  shipping: { name: string; phone: string; line1: string; line2: string; city: string; state: string; zip: string; country: string };
+  lines: { product: string; sku: string; weightG: number; qty: number; price: number; amount: number; refunded: boolean; refundDate: string | null }[];
 };
 
 function orderStatus(o: Order): OrderStatus {
@@ -745,6 +779,37 @@ export function allOrderRows(): OrderRow[] {
   return ORDERS.map(orderRow).reverse();
 }
 
+// mock 收货信息：按客户编号确定性生成（不消耗随机数，不影响已有数据）。接 Shopify 后换成订单的 shipping_address。
+const FIRST_NAMES = ['Emma', 'Liam', 'Olivia', 'Noah', 'Ava', 'Lucas', 'Mia', 'Ethan', 'Sophia', 'Mason', 'Chloe', 'Leo'];
+const LAST_NAMES = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Wilson', 'Davies', 'Clark', 'Walker', 'Lee', 'Martin', 'Young', 'King'];
+const STREETS = ['Maple St', 'Oak Ave', 'Cedar Rd', 'Pine Ln', 'Lake Dr', 'Hill St', 'River Rd', 'Park Ave'];
+type Place = [city: string, state: string, zip: string];
+const PLACES: Record<string, Place[]> = {
+  US: [['Los Angeles', 'CA', '90012'], ['New York', 'NY', '10001'], ['Austin', 'TX', '73301'], ['Seattle', 'WA', '98101'], ['Chicago', 'IL', '60601']],
+  CA: [['Toronto', 'ON', 'M5V 2T6'], ['Vancouver', 'BC', 'V6B 1A1']],
+  UK: [['London', 'England', 'E1 6AN'], ['Manchester', 'England', 'M1 1AE']],
+  AU: [['Sydney', 'NSW', '2000'], ['Melbourne', 'VIC', '3000']],
+  DE: [['Berlin', 'BE', '10115'], ['Munich', 'BY', '80331']],
+};
+
+function shippingOf(c: Customer) {
+  const n = Number(c.id.slice(1)) || 0;
+  const name = FIRST_NAMES[n % FIRST_NAMES.length] + ' ' + LAST_NAMES[(n * 7) % LAST_NAMES.length];
+  const places = PLACES[c.country] || PLACES.US;
+  const [city, state, zip] = places[n % places.length];
+  const phone = '+1 555 01' + String(n % 100).padStart(2, '0') + ' ' + String(1000 + ((n * 37) % 9000));
+  return {
+    name,
+    phone,
+    line1: 100 + ((n * 13) % 900) + ' ' + STREETS[n % STREETS.length],
+    line2: n % 4 === 0 ? 'Apt ' + (1 + (n % 30)) : '',
+    city,
+    state,
+    zip,
+    country: c.country,
+  };
+}
+
 export function orderDetail(id: string): OrderDetail | null {
   syncCatalog();
   const o = ORDERS.find((x) => x.id === id);
@@ -752,6 +817,7 @@ export function orderDetail(id: string): OrderDetail | null {
   const lines = o.items.map((it) => ({
     product: pById[it.productId].title,
     sku: pById[it.productId].sku,
+    weightG: pById[it.productId].weightG,
     qty: it.qty,
     price: it.price,
     amount: r2(it.qty * it.price),
@@ -759,5 +825,14 @@ export function orderDetail(id: string): OrderDetail | null {
     refundDate: it.refundAt ? new Date(it.refundAt).toISOString().slice(0, 10) : null,
   }));
   const profit = o.items.reduce((s, it) => (it.refunded ? s : s + it.qty * (it.price - pById[it.productId].cost)), 0);
-  return { ...orderRow(o), profit: r2(profit), lines };
+  const c = cById[o.customerId];
+  const cr = customerRow(c);
+  const shipping = (o as CachedOrder).shipping || shippingOf(c);
+  return {
+    ...orderRow(o),
+    profit: r2(profit),
+    customer: { id: c.id, name: shipping.name, email: c.email, phone: shipping.phone, country: c.country, source: c.source, orders: cr.orders, ltv: cr.ltv, firstOrder: cr.firstOrder },
+    shipping,
+    lines,
+  };
 }

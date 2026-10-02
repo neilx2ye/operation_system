@@ -1,0 +1,12 @@
+{
+  "#1190": {
+    "orderId": "#1190",
+    "waybillNumber": "DRY1190305276",
+    "trackingNumber": "DRY1190305276",
+    "yuntuAt": "2026-10-02T08:38:25.276Z",
+    "shopifyAt": null,
+    "shopifyFulfillmentId": null,
+    "shopifyError": null,
+    "dryRun": true
+  }
+}

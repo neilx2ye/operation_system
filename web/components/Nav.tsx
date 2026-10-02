@@ -27,6 +27,7 @@ const NAV: Entry[] = [
       { href: '/ads', label: '广告分析' },
     ],
   },
+  { href: '/settings', label: '设置' },
 ];
 
 const isGroup = (e: Entry): e is Group => 'children' in e;

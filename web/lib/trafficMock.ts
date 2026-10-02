@@ -126,5 +126,16 @@ export const CAMPAIGNS: CampaignRow[] = [
   { id: 't2', platform: 'TikTok', campaign: 'TopView - Offer', spend: 2600, impressions: 1700000, clicks: 6800, orders: 28, platformRevenue: 1900, newCustomerRate: 0.95, frequency: 1.5, ctrTrend: -0.06 },
 ];
 
+// 各落地页的渠道流量构成权重，顺序与 CHANNELS 一致：
+// Google Shopping / Google Search / Meta / TikTok / Email-SMS / Organic / Direct
+export const PAGE_MIX: Record<string, number[]> = {
+  '/': [8, 10, 10, 6, 10, 18, 38],
+  '/collections/best-sellers': [32, 10, 22, 8, 6, 12, 10],
+  '/products/tea-sampler': [28, 6, 24, 18, 4, 10, 10],
+  '/pages/tiktok-offer': [1, 0, 6, 90, 1, 1, 1],
+  '/products/gift-set': [18, 10, 16, 6, 22, 10, 18],
+  '/blogs/brewing-guide': [2, 8, 6, 2, 10, 60, 12],
+};
+
 // 毛利率（用于盈亏平衡 ROAS = 1 / 毛利率）
 export const GROSS_MARGIN = 0.42;

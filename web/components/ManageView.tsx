@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { int, money, pct } from '@/lib/format';
 import type { CatalogRow } from '@/lib/mock';
 
-type F = 'sku' | 'spu' | 'variant' | 'category' | 'price' | 'cost' | 'stock' | 'reorderPoint' | 'leadTimeDays' | 'supplier' | 'status';
+type F = 'sku' | 'spu' | 'variant' | 'category' | 'price' | 'cost' | 'weightG' | 'stock' | 'reorderPoint' | 'leadTimeDays' | 'supplier' | 'status';
 type Draft = Record<string, Partial<Record<F, string>>>;
 
-const NUM: F[] = ['price', 'cost', 'stock', 'reorderPoint', 'leadTimeDays'];
+const NUM: F[] = ['price', 'cost', 'weightG', 'stock', 'reorderPoint', 'leadTimeDays'];
 const REQUIRED: F[] = ['sku', 'spu', 'category'];
-const CSV_FIELDS: F[] = ['sku', 'spu', 'variant', 'category', 'price', 'cost', 'stock', 'reorderPoint', 'leadTimeDays', 'supplier', 'status'];
+const CSV_FIELDS: F[] = ['sku', 'spu', 'variant', 'category', 'price', 'cost', 'weightG', 'stock', 'reorderPoint', 'leadTimeDays', 'supplier', 'status'];
 const STATUS = [
   { v: 'active', l: '在售' },
   { v: 'draft', l: '草稿' },
@@ -122,6 +122,7 @@ export function ManageView() {
       out: act.filter((r) => num(r, 'stock') <= 0).length,
       low: act.filter((r) => num(r, 'stock') > 0 && num(r, 'stock') <= num(r, 'reorderPoint')).length,
       noCost: act.filter((r) => !(num(r, 'cost') > 0)).length,
+      noWeight: act.filter((r) => !(num(r, 'weightG') > 0)).length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, draft]);
@@ -228,6 +229,7 @@ export function ManageView() {
           <div className="kpi"><div className="kpi-label">缺货</div><div className={'kpi-value ' + (kpi.out ? 'neg' : '')}>{kpi.out}</div></div>
           <div className="kpi"><div className="kpi-label">需补货</div><div className="kpi-value">{kpi.low}</div><div className="kpi-hint">库存 ≤ 补货点</div></div>
           <div className="kpi"><div className="kpi-label">未填成本</div><div className={'kpi-value ' + (kpi.noCost ? 'neg' : '')}>{kpi.noCost}</div><div className="kpi-hint">成本为 0 会高估毛利</div></div>
+          <div className="kpi"><div className="kpi-label">未填重量</div><div className={'kpi-value ' + (kpi.noWeight ? 'neg' : '')}>{kpi.noWeight}</div><div className="kpi-hint">推云途单时按默认重量估算</div></div>
         </div>
       </div>
 
@@ -275,6 +277,7 @@ export function ManageView() {
               <th>类目</th>
               <th>售价 (USD)</th>
               <th>成本 (USD)</th>
+              <th>重量 (g)</th>
               <th className="n">毛利率</th>
               <th>库存</th>
               <th>补货点</th>
@@ -298,6 +301,7 @@ export function ManageView() {
                   <td>{cell(r, 'category', 'w-md')}</td>
                   <td><span className="muted">$ </span>{cell(r, 'price', '', 'number')}</td>
                   <td><span className="muted">$ </span>{cell(r, 'cost', '', 'number')}</td>
+                  <td>{cell(r, 'weightG', '', 'number')}</td>
                   <td className={'n ' + (margin != null && margin < 0.3 ? 'neg' : '')}>{margin == null ? '-' : pct(margin)}</td>
                   <td>{cell(r, 'stock', '', 'number')}</td>
                   <td>{cell(r, 'reorderPoint', '', 'number')}</td>
