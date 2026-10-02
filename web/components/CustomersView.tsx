@@ -5,6 +5,7 @@ import { DataTable, downloadCsv, filterRows, sortRows, toCsv, type Column, type 
 import { MiniTable } from '@/components/Sparkline';
 import { CustomerInsights, matchFilters, segmentOf, type FilterKey, type Filters } from '@/components/CustomerInsights';
 import { int, money } from '@/lib/format';
+import { useHotReload } from '@/lib/useHotReload';
 import type { CustomerDetail, CustomerRow } from '@/lib/mock';
 
 type TagMap = Record<string, string[]>;
@@ -112,6 +113,7 @@ export function CustomersView() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [bulkText, setBulkText] = useState('');
   const [saveError, setSaveError] = useState(false);
+  const { version } = useHotReload();
 
   useEffect(() => {
     let alive = true;
@@ -132,7 +134,7 @@ export function CustomersView() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [version]);
 
   useEffect(() => {
     if (!selected) {
@@ -148,7 +150,7 @@ export function CustomersView() {
     return () => {
       alive = false;
     };
-  }, [selected]);
+  }, [selected, version]);
 
   const applyTags = useCallback((ids: string[], add: string[], remove: string[]) => {
     setTags((prev) => {

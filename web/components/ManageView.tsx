@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { int, money, pct } from '@/lib/format';
+import { useHotReload } from '@/lib/useHotReload';
 import type { CatalogRow } from '@/lib/mock';
 
 type F = 'sku' | 'spu' | 'variant' | 'category' | 'price' | 'cost' | 'weightG' | 'stock' | 'reorderPoint' | 'leadTimeDays' | 'supplier' | 'status';
@@ -65,6 +66,7 @@ export function ManageView() {
   const [statusF, setStatusF] = useState('');
   const [onlyLow, setOnlyLow] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { version } = useHotReload();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -78,7 +80,7 @@ export function ManageView() {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, version]);
 
   const val = (r: CatalogRow, f: F) => draft[r.id]?.[f] ?? String(r[f]);
   const num = (r: CatalogRow, f: F) => Number(val(r, f));

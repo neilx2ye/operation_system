@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useHotReload } from '@/lib/useHotReload';
 
 type View = {
   yuntu: { baseUrl: string; customerCode: string; apiSecretMask: string; channelCode: string; unitWeightKg: string };
@@ -42,6 +43,7 @@ export function SettingsView() {
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [test, setTest] = useState<TestResult | null>(null);
+  const { version } = useHotReload();
 
   function apply(v: View) {
     setView(v);
@@ -61,7 +63,7 @@ export function SettingsView() {
     fetch('/api/settings')
       .then((r) => r.json())
       .then(apply);
-  }, []);
+  }, [version]);
 
   if (!f || !view) return <div className="content">加载中...</div>;
   const set = (k: keyof Form) => (v: string) => setF({ ...f, [k]: v });

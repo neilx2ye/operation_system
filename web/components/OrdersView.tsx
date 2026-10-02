@@ -5,6 +5,7 @@ import { DataTable, downloadCsv, filterRows, sortRows, toCsv, type Column, type 
 import { MiniTable } from '@/components/Sparkline';
 import { ShipCard } from '@/components/ShipCard';
 import { int, money } from '@/lib/format';
+import { useHotReload } from '@/lib/useHotReload';
 import type { OrderDetail, OrderRow } from '@/lib/mock';
 
 const STATUSES = ['已完成', '部分退款', '已退款'] as const;
@@ -31,6 +32,7 @@ export function OrdersView() {
   const [sort, setSort] = useState<Sort>({ key: 'date', dir: -1 });
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const { version } = useHotReload();
   useEffect(() => {
     let alive = true;
     fetch('/api/orders')
@@ -44,7 +46,7 @@ export function OrdersView() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [version]);
 
   useEffect(() => {
     if (!selected) {
@@ -60,7 +62,7 @@ export function OrdersView() {
     return () => {
       alive = false;
     };
-  }, [selected]);
+  }, [selected, version]);
 
   const visible = useMemo(() => {
     const base = status ? rows.filter((r) => r.status === status) : rows;

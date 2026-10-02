@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { OrderDetail } from '@/lib/mock';
 import { orderWeight, type ManualOrder } from '@/lib/shipTypes';
+import { useHotReload } from '@/lib/useHotReload';
 import { ManualShipDialog } from '@/components/ManualShipDialog';
 
 type Shipment = {
@@ -45,6 +46,7 @@ export function ShipCard({ detail }: { detail: OrderDetail }) {
   const [notify, setNotify] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const { version } = useHotReload();
 
   useEffect(() => {
     let alive = true;
@@ -62,7 +64,7 @@ export function ShipCard({ detail }: { detail: OrderDetail }) {
     return () => {
       alive = false;
     };
-  }, [orderId]);
+  }, [orderId, version]);
 
   async function run(retryShopifyOnly: boolean, manual?: ManualOrder) {
     if (!retryShopifyOnly && !manual && !confirm(`确认把订单 ${orderId} 创建到云途发货系统?${ready?.shopify ? (notify ? '\n将同步追踪号到 Shopify并邮件通知客户。' : '\n将同步追踪号到 Shopify(不通知客户)。') : ''}`)) return;
