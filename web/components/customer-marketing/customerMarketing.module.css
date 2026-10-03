@@ -1,0 +1,435 @@
+/* 用户页 × EDM 受众联动的局部样式。
+   全部走 CSS Module，类名不进入全局，避免影响 OPS 其它页面。
+   颜色沿用 globals.css 里的 :root 变量。 */
+
+/* ---------- 面板 / 通用 ---------- */
+
+.panel {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panelHead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.panelTitle {
+  font-size: 14px;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.blockTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.warn {
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 6px;
+  padding: 6px 8px;
+  line-height: 1.6;
+}
+
+.danger {
+  font-size: 12px;
+  color: #991b1b;
+  background: #fee2e2;
+  border-radius: 6px;
+  padding: 6px 8px;
+  line-height: 1.6;
+}
+
+.mockBanner {
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px dashed #f59e0b;
+  border-radius: 6px;
+  padding: 6px 8px;
+  line-height: 1.6;
+}
+
+.noticeOk {
+  font-size: 13px;
+  color: #166534;
+  background: #dcfce7;
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.6;
+}
+
+.noticeErr {
+  font-size: 13px;
+  color: #991b1b;
+  background: #fee2e2;
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.6;
+}
+
+.mono {
+  font: 600 12px ui-monospace, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* ---------- 按钮 / 输入 ---------- */
+
+.btnRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btnPrimary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.select,
+.input {
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+
+.input {
+  min-width: 180px;
+}
+
+/* ---------- 作用范围 ---------- */
+
+.scopeRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scopeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scopeBtnOn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.scopeBtnOn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.scopeCount {
+  font-weight: 600;
+}
+
+/* ---------- 预览指标 / 排除原因 ---------- */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.metric {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.metricValue {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.metricNeg {
+  color: var(--neg);
+}
+
+.metricOk {
+  color: var(--pos);
+}
+
+/* ---------- 预检：字段勾选 / 提醒列表 ---------- */
+
+.options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 4px 12px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  line-height: 1.7;
+}
+
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reason {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.reasonCode {
+  flex: none;
+  font: 600 11px ui-monospace, Consolas, monospace;
+  color: #475569;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.reasonText {
+  color: var(--muted);
+}
+
+.reasonCount {
+  margin-left: auto;
+  flex: none;
+  font-weight: 600;
+}
+
+/* ---------- 单次确认 ---------- */
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+
+.confirmHead {
+  font-weight: 600;
+  font-size: 13px;
+  color: #92400e;
+}
+
+.confirmGrid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.confirmK {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.confirmV {
+  color: var(--ink);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.confirmActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 营销状态标签 ---------- */
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.tagSubscribed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.tagUnsubscribed {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.tagSuppressed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.tagUnknown {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.tagMissing {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.matched {
+  color: var(--pos);
+  font-size: 12px;
+}
+
+/* ---------- 详情侧栏营销卡片 ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kvRows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kvRow {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  align-items: baseline;
+}
+
+.kvKey {
+  color: var(--muted);
+}
+
+.kvVal {
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.valYes {
+  color: var(--pos);
+}
+
+.valNo {
+  color: var(--neg);
+}
+
+.valUnknown {
+  color: var(--muted);
+}
+
+.cardNote {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+/* ---------- 列表选择条 ---------- */
+
+.selBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.selCount {
+  font-weight: 600;
+}
+
+.selNote {
+  font-size: 12px;
+  color: #1d4ed8;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}

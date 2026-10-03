@@ -7,9 +7,15 @@
     "build": "next build",
     "start": "next start",
     "smoke": "node smoke-test.mjs",
+    "test:edm": "node edm-test.mjs",
     "test:hot-reload": "node hot-reload-test.mjs"
   },
   "dependencies": {
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/view": "^6.43.13",
+    "@uiw/react-codemirror": "^4.25.12",
+    "diff": "^8.0.4",
+    "js-beautify": "^1.15.4",
     "next": "16.3.8",
     "react": "19.3.0",
     "react-dom": "19.3.0"

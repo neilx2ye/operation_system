@@ -10,3 +10,7 @@ next-env.d.ts
 /data/shopify-cache.json
 /data/shopify-sync-status.json
 /data/*.tmp
+# EDM 本地运行数据：模板、版本、素材、受众快照、准备记录、执行记录
+/data/edm/
+# 验证用的隔离构建目录（NEXT_DIST_DIR=.next-verify），避免覆盖开发服务器的 .next
+/.next-verify/

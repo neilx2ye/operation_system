@@ -115,20 +115,22 @@ async function runBulk(cfg: ShopifyConfig, inner: string, label: string, setStep
 const PRODUCT_Q = `{ productVariants { edges { node {
   id sku title displayName price inventoryQuantity
   selectedOptions { name value }
-  product { id title productType status }
+  product { id title productType status featuredMedia { preview { image { url } } } }
   inventoryItem { unitCost { amount } measurement { weight { value unit } } }
 } } } }`;
 
 const VISIT = `source sourceType referrerUrl landingPage utmParameters { source medium }`;
 
 const ORDER_Q = `{ orders { edges { node {
-  id name createdAt cancelledAt test email phone
-  customer { id email firstName lastName defaultAddress { countryCodeV2 } }
+  id name createdAt cancelledAt test email phone displayFulfillmentStatus
+  customer { id email firstName lastName tags defaultAddress { countryCodeV2 } }
   shippingAddress { name phone address1 address2 city provinceCode zip countryCodeV2 }
   refunds { createdAt }
+  fulfillments(first: 10) { displayStatus updatedAt }
   customerJourneySummary { firstVisit { ${VISIT} } lastVisit { ${VISIT} } }
   lineItems { edges { node {
-    id quantity refundableQuantity sku title
+    id quantity refundableQuantity sku title name
+    image { url }
     variant { id }
     discountedUnitPriceSet { shopMoney { amount } }
   } } }
@@ -148,6 +150,48 @@ const ABANDON_Q = `query($after: String) { abandonedCheckouts(first: 25, after: 
 
 const GRAMS: Record<string, number> = { GRAMS: 1, KILOGRAMS: 1000, OUNCES: 28.3495, POUNDS: 453.592 };
 const STATUS_MAP: Record<string, string> = { ACTIVE: 'active', DRAFT: 'draft', ARCHIVED: 'archived' };
+const FULFILLMENT_DISPLAY_LABELS: Record<string, string> = {
+  ATTEMPTED_DELIVERY: '已尝试派送',
+  CANCELED: '物流已取消',
+  CARRIER_PICKED_UP: '承运商已揽收',
+  CONFIRMED: '已确认发货',
+  DELAYED: '物流延误',
+  DELIVERED: '已送达',
+  FAILURE: '物流异常',
+  FULFILLED: '已发货',
+  IN_TRANSIT: '运输中',
+  LABEL_PRINTED: '面单已打印',
+  LABEL_PURCHASED: '面单已购买',
+  LABEL_VOIDED: '面单已作废',
+  MARKED_AS_FULFILLED: '已标记发货',
+  NOT_DELIVERED: '未送达',
+  OUT_FOR_DELIVERY: '派送中',
+  PICKED_UP: '已取件',
+  READY_FOR_PICKUP: '待取件',
+  SUBMITTED: '已提交承运商',
+};
+const ORDER_FULFILLMENT_LABELS: Record<string, string> = {
+  FULFILLED: '已发货',
+  IN_PROGRESS: '发货处理中',
+  ON_HOLD: '暂停发货',
+  OPEN: '未发货',
+  PARTIALLY_FULFILLED: '部分发货',
+  PENDING_FULFILLMENT: '等待履约',
+  REQUEST_DECLINED: '履约被拒',
+  RESTOCKED: '未发货',
+  SCHEDULED: '已排期发货',
+  UNFULFILLED: '未发货',
+};
+
+function logisticsStatusOf(o: any): string {
+  const fulfillments = Array.isArray(o.fulfillments) ? o.fulfillments : [];
+  const latest = fulfillments
+    .filter((f: any) => f?.displayStatus)
+    .slice()
+    .sort((a: any, b: any) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))[0];
+  if (latest?.displayStatus) return FULFILLMENT_DISPLAY_LABELS[latest.displayStatus] || String(latest.displayStatus);
+  return ORDER_FULFILLMENT_LABELS[o.displayFulfillmentStatus] || '未发货';
+}
 
 function buildProducts(rows: any[]) {
   const seen = new Set<string>();
@@ -167,6 +211,7 @@ function buildProducts(rows: any[]) {
       spu,
       variant,
       sku,
+      imageUrl: String(v.product?.featuredMedia?.preview?.image?.url || ''),
       weightG: w ? Math.round(toNum(w.value) * (GRAMS[w.unit] ?? 1)) : 0,
       stock: Math.max(0, Math.round(toNum(v.inventoryQuantity))),
       reorderPoint: 30,
@@ -218,9 +263,9 @@ function buildOrders(rows: any[], products: any[]) {
     const key = li.variant?.id ? 'v' + gidNum(li.variant.id) : 'x' + sha(String(li.sku || li.title || li.id));
     if (!prodById.has(key)) {
       const price = r2(toNum(li.discountedUnitPriceSet?.shopMoney?.amount));
-      const title = String(li.title || '已删除商品');
+      const title = String(li.name || li.title || '已删除商品');
       const p = {
-        id: key, title, spu: title, variant: '', sku: String(li.sku || '').trim() || key.toUpperCase(),
+        id: key, title, spu: title, variant: '', sku: String(li.sku || '').trim() || key.toUpperCase(), imageUrl: String(li.image?.url || ''),
         weightG: 0, stock: 0, reorderPoint: 30, leadTimeDays: 14, supplier: '', status: 'archived',
         category: 'Deleted/Custom', price, cost: 0, refundProb: 0, pop: 0,
       };
@@ -242,7 +287,15 @@ function buildOrders(rows: any[], products: any[]) {
     const country = a?.countryCodeV2 || o.customer?.defaultAddress?.countryCodeV2 || 'N/A';
     const fullName = [o.customer?.firstName, o.customer?.lastName].filter(Boolean).join(' ');
     if (!customers.has(cid)) {
-      customers.set(cid, { id: cid, email: email || '(无邮箱)', country, source: channelOf(o), name: a?.name || fullName || '', phone: a?.phone || o.phone || '' });
+      customers.set(cid, {
+        id: cid,
+        email: email || '(无邮箱)',
+        country,
+        source: channelOf(o),
+        name: a?.name || fullName || '',
+        phone: a?.phone || o.phone || '',
+        tags: Array.isArray(o.customer?.tags) ? o.customer.tags.map(String) : [],
+      });
     }
 
     const refunds: any[] = o.refunds || [];
@@ -254,8 +307,9 @@ function buildOrders(rows: any[], products: any[]) {
       const productId = ensureProduct(li);
       const price = r2(toNum(li.discountedUnitPriceSet?.shopMoney?.amount));
       const refQty = Math.max(0, Math.min(qty, qty - Math.round(toNum(li.refundableQuantity ?? qty))));
-      if (refQty < qty) items.push({ productId, qty: qty - refQty, price, refunded: false, refundAt: null });
-      if (refQty > 0) items.push({ productId, qty: refQty, price, refunded: true, refundAt });
+      const itemMeta = { title: String(li.name || li.title || prodById.get(productId)?.title || '已删除商品'), imageUrl: String(li.image?.url || prodById.get(productId)?.imageUrl || '') };
+      if (refQty < qty) items.push({ productId, qty: qty - refQty, price, refunded: false, refundAt: null, ...itemMeta });
+      if (refQty > 0) items.push({ productId, qty: refQty, price, refunded: true, refundAt, ...itemMeta });
     }
     if (!items.length) continue;
 
@@ -264,6 +318,7 @@ function buildOrders(rows: any[], products: any[]) {
       customerId: cid,
       t,
       items,
+      logisticsStatus: logisticsStatusOf(o),
       shipping: a
         ? { name: a.name || fullName || '', phone: a.phone || o.phone || '', line1: a.address1 || '', line2: a.address2 || '', city: a.city || '', state: a.provinceCode || '', zip: a.zip || '', country: a.countryCodeV2 || country }
         : undefined,

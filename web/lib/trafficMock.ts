@@ -1,4 +1,5 @@
-// 站内分析 / 广告分析 的 Mock 数据（接入真实 GA4 / Shopify / 广告 API 后替换此文件即可）
+// 广告分析 的 Mock 数据（花费 / 平台归因需要 Google / Meta / TikTok 广告 API，接入后替换此文件即可）。
+// 站内分析已改用 Shopify 分析 API，见 lib/shopifyAnalytics.ts。
 
 export type Platform = 'Google' | 'Meta' | 'TikTok';
 

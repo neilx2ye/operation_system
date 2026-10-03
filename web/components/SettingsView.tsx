@@ -1,12 +1,40 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useHotReload } from '@/lib/useHotReload';
 
+type KlaviyoAccess = {
+  operatorVerified: boolean;
+  via: string | null;
+  subject: string | null;
+  note: string;
+  localOperatorAllowed: boolean;
+  trustedProxyConfigured: boolean;
+  tokenConfigured: boolean;
+  originsAllowlisted: number;
+};
+type Klaviyo = {
+  accountId: string | null;
+  accountLabel: string;
+  storeKey: string;
+  apiRevision: string;
+  defaultListId: string | null;
+  defaultListName: string;
+  writesEnabled: boolean;
+  lastCheck: { ok: boolean; detail: string } | null;
+  lastCheckedAt: string | null;
+  configured: boolean;
+  keyMask: string;
+  keySource: string;
+  writesEnabledByEnv: boolean;
+  writesReady: boolean;
+  access: KlaviyoAccess;
+};
 type View = {
   yuntu: { baseUrl: string; customerCode: string; apiSecretMask: string; channelCode: string; unitWeightKg: string };
   shopify: { shop: string; adminTokenMask: string; apiVersion: string };
-  ready: { yuntu: boolean; shopify: boolean };
+  klaviyo: Klaviyo;
+  ready: { yuntu: boolean; shopify: boolean; klaviyo: boolean };
 };
 type Form = {
   baseUrl: string;
@@ -17,8 +45,27 @@ type Form = {
   shop: string;
   adminToken: string;
   apiVersion: string;
+  accountLabel: string;
+  storeKey: string;
+  apiRevision: string;
+  defaultListId: string;
+  defaultListName: string;
+  writesEnabled: boolean;
 };
+type StringKey = { [K in keyof Form]: Form[K] extends string ? K : never }[keyof Form];
 type TestResult = { ok: boolean; name?: string; domain?: string; missingScopes?: string[]; error?: string };
+type KlaviyoTestResult =
+  | { ok: true; account: { id: string; label: string } | null; accounts: number; detail: string; readable: string[]; unverified: string[] }
+  | { ok: false; error: string; authFailed: boolean };
+type KlaviyoTestResponse = {
+  ok?: boolean;
+  account?: { id: string; label: string } | null;
+  accounts?: number;
+  detail?: string;
+  readable?: string[];
+  unverified?: string[];
+  error?: string;
+};
 
 function Field(props: { label: string; hint?: string; value: string; onChange: (v: string) => void; placeholder?: string; secret?: boolean; mask?: string }) {
   return (
@@ -41,8 +88,12 @@ export function SettingsView() {
   const [f, setF] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [kTesting, setKTesting] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [test, setTest] = useState<TestResult | null>(null);
+  const [kTest, setKTest] = useState<KlaviyoTestResult | null>(null);
+  const [hl, setHl] = useState(false);
+  const hlDone = useRef(false);
   const { version } = useHotReload();
 
   function apply(v: View) {
@@ -56,6 +107,12 @@ export function SettingsView() {
       shop: v.shopify.shop,
       adminToken: '',
       apiVersion: v.shopify.apiVersion,
+      accountLabel: v.klaviyo.accountLabel,
+      storeKey: v.klaviyo.storeKey,
+      apiRevision: v.klaviyo.apiRevision,
+      defaultListId: v.klaviyo.defaultListId ?? '',
+      defaultListName: v.klaviyo.defaultListName,
+      writesEnabled: v.klaviyo.writesEnabled,
     });
   }
 
@@ -65,13 +122,40 @@ export function SettingsView() {
       .then(apply);
   }, [version]);
 
+  // 深链 ?integration=klaviyo 或 #klaviyo:滚动到卡片并高亮;只读 window.location,不写入任何持久状态
+  useEffect(() => {
+    if (!view || hlDone.current) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('integration') !== 'klaviyo' && window.location.hash !== '#klaviyo') return;
+    hlDone.current = true;
+    setHl(true);
+    document.getElementById('klaviyo')?.scrollIntoView({ block: 'start' });
+  }, [view]);
+
   if (!f || !view) return <div className="content">加载中...</div>;
-  const set = (k: keyof Form) => (v: string) => setF({ ...f, [k]: v });
+  const set = (k: StringKey) => (v: string) => {
+    const next: Form = { ...f };
+    next[k] = v;
+    setF(next);
+  };
 
   async function save() {
-    if (!f) return;
+    if (!f || !view) return;
+    const rev = f.apiRevision.trim();
+    if (rev && !/^\d{4}-\d{2}-\d{2}$/.test(rev)) {
+      setNotice({ ok: false, text: 'API revision 需要形如 2026-07-15' });
+      return;
+    }
     setSaving(true);
     setNotice(null);
+    const kv = view.klaviyo;
+    const patch: Record<string, string | boolean> = {};
+    if (f.accountLabel !== kv.accountLabel) patch.accountLabel = f.accountLabel;
+    if (f.storeKey !== kv.storeKey) patch.storeKey = f.storeKey;
+    if (rev !== kv.apiRevision) patch.apiRevision = rev;
+    if (f.defaultListId !== (kv.defaultListId ?? '')) patch.defaultListId = f.defaultListId;
+    if (f.defaultListName !== kv.defaultListName) patch.defaultListName = f.defaultListName;
+    if (f.writesEnabled !== kv.writesEnabled) patch.writesEnabled = f.writesEnabled;
     try {
       const r = await fetch('/api/settings', {
         method: 'PUT',
@@ -79,6 +163,7 @@ export function SettingsView() {
         body: JSON.stringify({
           yuntu: { baseUrl: f.baseUrl, customerCode: f.customerCode, apiSecret: f.apiSecret, channelCode: f.channelCode, unitWeightKg: f.unitWeightKg },
           shopify: { shop: f.shop, adminToken: f.adminToken, apiVersion: f.apiVersion },
+          ...(Object.keys(patch).length ? { klaviyo: patch } : {}),
         }),
       });
       const d = await r.json();
@@ -106,6 +191,49 @@ export function SettingsView() {
       setTesting(false);
     }
   }
+
+  // 测试会由服务端写入 lastCheck/lastCheckedAt;这里只回读这两项,不用服务端视图覆盖表单里未保存的编辑
+  async function syncLastCheck() {
+    try {
+      const r = await fetch('/api/settings');
+      if (!r.ok) return;
+      const d: View = await r.json();
+      setView((prev) => (prev ? { ...prev, klaviyo: { ...prev.klaviyo, lastCheck: d.klaviyo.lastCheck, lastCheckedAt: d.klaviyo.lastCheckedAt } } : prev));
+    } catch {
+      // 只影响「最近检查」的展示,失败不改变测试结果本身
+    }
+  }
+
+  async function testKlaviyo() {
+    setKTesting(true);
+    setKTest(null);
+    try {
+      const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: 'klaviyo' }) });
+      const d: KlaviyoTestResponse | null = await r.json().catch(() => null);
+      if (r.ok && d?.ok === true) {
+        setKTest({
+          ok: true,
+          account: d.account ?? null,
+          accounts: typeof d.accounts === 'number' ? d.accounts : 0,
+          detail: typeof d.detail === 'string' ? d.detail : '',
+          readable: Array.isArray(d.readable) ? d.readable : [],
+          unverified: Array.isArray(d.unverified) ? d.unverified : [],
+        });
+      } else {
+        setKTest({ ok: false, error: (d && d.error) || '测试失败(HTTP ' + r.status + ')', authFailed: r.status === 401 || r.status === 403 });
+      }
+      await syncLastCheck();
+    } catch (e: any) {
+      setKTest({ ok: false, error: e.message || '网络错误', authFailed: false });
+    } finally {
+      setKTesting(false);
+    }
+  }
+
+  const kv = view.klaviyo;
+  const accessLine = kv.access.operatorVerified
+    ? '已验证(' + (kv.access.via ?? '未知来源') + (kv.access.subject ? ':' + kv.access.subject : '') + ')。' + kv.access.note
+    : '未验证。' + kv.access.note;
 
   return (
     <div className="content page-wide set-page">
@@ -153,6 +281,77 @@ export function SettingsView() {
                 test.error
               )}
             </div>
+          )}
+        </section>
+
+        <section className={'panel set-card' + (hl ? ' hl' : '')} id="klaviyo">
+          <div className="set-head">
+            <b>Klaviyo（EDM 邮件）</b>
+            <span className={'tag ' + (kv.configured ? 'green' : 'amber')}>{kv.configured ? '已配置' : '未配置'}</span>
+          </div>
+
+          <div className="set-field">
+            <span className="set-label">私钥来源</span>
+            <span>{kv.keySource}{kv.keyMask ? '(' + kv.keyMask + ')' : '(未配置)'}</span>
+            <span className="set-hint">私钥只从服务端环境变量 KLAVIYO_PRIVATE_API_KEY 读取,设置页没有对应的输入框,也不会把私钥回显或保存到浏览器。</span>
+          </div>
+
+          <Field label="账号标签" value={f.accountLabel} onChange={set('accountLabel')} placeholder="例如:主账号/测试账号" hint="仅用于本地区分账号,测试连接成功后服务端会写入远端返回的账号名" />
+          <Field label="店铺绑定" value={f.storeKey} onChange={set('storeKey')} placeholder="例如:your-store.myshopify.com" hint="标记该 Klaviyo 账号对应的店铺,仅本地记录,不参与 Klaviyo 请求" />
+          <Field label="API revision" value={f.apiRevision} onChange={set('apiRevision')} placeholder="2026-07-15" hint="显式固定 Klaviyo 请求 revision,不跟随远端默认值;需形如 YYYY-MM-DD,留空则回退到服务端默认 revision" />
+          <Field label="默认目标名单 ID" value={f.defaultListId} onChange={set('defaultListId')} placeholder="如 Rxxxxx" hint="名单同步的默认目标;留空表示未指定" />
+          <Field label="默认目标名单名称" value={f.defaultListName} onChange={set('defaultListName')} placeholder="用于人工核对名单" />
+
+          <label className="set-field">
+            <span className="set-label">允许真实写入</span>
+            <span className="set-test">
+              <input type="checkbox" checked={f.writesEnabled} onChange={(e) => setF({ ...f, writesEnabled: e.target.checked })} />
+              <span className="muted">本页局部开关,默认关闭;关闭时模板设计与预览不受影响</span>
+            </span>
+          </label>
+
+          <div className="set-test">
+            <button disabled={kTesting || !kv.configured} onClick={testKlaviyo}>
+              {kTesting ? '测试中...' : '测试连接'}
+            </button>
+            <span className="muted">{kv.configured ? '调用 Klaviyo GET /api/accounts 只读核对,先保存再测试' : '未配置 KLAVIYO_PRIVATE_API_KEY 环境变量,无法测试连接'}</span>
+          </div>
+
+          {kTest && (kTest.ok ? (
+            <div className="notice ok">
+              已连接：{kTest.account ? kTest.account.label + '（' + kTest.account.id + '）' : kTest.detail || '私钥有效,但未读取到账号信息'}
+              <div className="set-hint">已确认读权限:{kTest.readable.join('、') || '无'}</div>
+              <div className="set-hint">待首次操作验证:{kTest.unverified.join('、') || '无'} —— 账号检查通过只证明私钥有效,不能证明 templates:write 等写权限已配置。</div>
+              {kTest.accounts > 1 && <div className="set-hint">该私钥可读 {kTest.accounts} 个账号,此处展示第一个。</div>}
+            </div>
+          ) : (
+            <div className="notice err">
+              {kTest.error}
+              {kTest.authFailed && <div className="set-hint">操作员身份未验证:真实 Klaviyo 写入只允许本机、已配置的可信上游网关或显式令牌。</div>}
+            </div>
+          ))}
+
+          {kv.lastCheckedAt && (
+            <div className="set-note muted">
+              最近检查:{new Date(kv.lastCheckedAt).toLocaleString()}
+              {kv.lastCheck ? '(' + (kv.lastCheck.ok ? '成功' : '失败') + ':' + kv.lastCheck.detail + ')' : ''}
+            </div>
+          )}
+
+          <div className="set-head">
+            <b>真实写入闸门</b>
+            <span className={'tag ' + (kv.writesReady ? 'green' : 'amber')}>{kv.writesReady ? '已就绪' : '未就绪'}</span>
+          </div>
+          <div className="set-field">
+            <span className="set-hint">私钥:{kv.configured ? '已配置' : '未配置 KLAVIYO_PRIVATE_API_KEY'}</span>
+            <span className="set-hint">环境开关:{kv.writesEnabledByEnv ? 'KLAVIYO_ENABLE_WRITES 已设为 true' : 'KLAVIYO_ENABLE_WRITES 不是 true'}</span>
+            <span className="set-hint">本地开关:{kv.writesEnabled ? '已打开' : '未打开'}</span>
+            <span className="set-hint">操作员身份:{accessLine}</span>
+          </div>
+          {kv.writesReady ? (
+            <div className="set-note muted">真实写入已就绪,但每次写操作仍需确认影响范围:不调用发送 API 也不能保证远端绝不发信。</div>
+          ) : (
+            <div className="set-note muted">真实写入关闭不影响模板设计与预览,只是真实发布、图片上传和名单同步会一并被服务端拦截,前端禁用按钮不等于授权。</div>
           )}
         </section>
       </div>

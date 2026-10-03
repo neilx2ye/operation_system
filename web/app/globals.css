@@ -244,6 +244,61 @@ tbody tr.active {
   color: var(--neg);
 }
 
+/* ---------- 订单 Item 展示 ---------- */
+.order-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 250px;
+  white-space: normal;
+}
+
+.order-item,
+.detail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.order-item-thumb {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.order-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.order-item-copy {
+  min-width: 0;
+}
+
+.order-item-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.detail-item {
+  min-width: 220px;
+  white-space: normal;
+}
+
 /* ---------- 详情面板 ---------- */
 
 .detail {
@@ -422,6 +477,27 @@ button.link {
   background: none;
   color: var(--accent);
   padding: 0;
+}
+
+button.link-underline {
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+  padding: 0;
+  margin-left: 4px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+button.link-underline:hover {
+  opacity: 0.8;
+}
+
+/* 已勾选的表格行（DataTable 传入 selection 时生效） */
+tr.selected td {
+  background: #eff6ff;
 }
 
 /* ---------- 客户标签 ---------- */
@@ -961,6 +1037,11 @@ a.btn:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* 深链 ?integration=klaviyo / #klaviyo 定位时的高亮 */
+.set-card.hl {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 .set-head {

@@ -1,53 +1,24 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { int, money, pct } from '@/lib/format';
 import type { CustomerRow } from '@/lib/mock';
+import {
+  FILTER_LABELS,
+  SEGMENTS,
+  cohortOf,
+  matchFilters,
+  segmentOf,
+  type FilterKey,
+  type Filters,
+  type SegmentKey,
+} from '@/lib/customer-segmentation';
 
-export const SEGMENTS = [
-  { key: '高价值忠诚', color: '#16a34a', action: '新品优先、会员权益、邀请评价/转介绍' },
-  { key: '复购活跃', color: '#4ade80', action: '补货提醒、搭配推荐、提升客单价' },
-  { key: '新客(30天内)', color: '#3b82f6', action: '欢迎流程、使用指南、7-14 天二购提醒' },
-  { key: '弃购未成交', color: '#f97316', action: '弃购挽回邮件(1h/24h/72h)、小额首单券、高客单人工跟进' },
-  { key: '待二购', color: '#f59e0b', action: '关联产品/二购券邮件，抓住复购窗口' },
-  { key: '重点召回', color: '#ef4444', action: '老客召回、专属优惠、人工关怀' },
-  { key: '沉睡单购', color: '#94a3b8', action: '低成本邮件/再营销，不加大投入' },
-  { key: '全退款', color: '#7c3aed', action: '排查退款原因（产品/物流/预期），暂不促销' },
-] as const;
-
-export type SegmentKey = (typeof SEGMENTS)[number]['key'];
-
-export type Filters = { segment?: string; source?: string; country?: string; cohort?: string; abandon?: string };
-export type FilterKey = keyof Filters;
-export const FILTER_LABELS: Record<FilterKey, string> = { segment: '分层', source: '渠道', country: '国家', cohort: '首购月', abandon: '弃购' };
-
-export function cohortOf(r: CustomerRow): string | null {
-  return r.firstOrder ? (r.firstOrder as string).slice(0, 7) : null;
-}
-
-export function matchFilters(r: CustomerRow, f: Filters): boolean {
-  if (f.segment && segmentOf(r) !== f.segment) return false;
-  if (f.source && r.source !== f.source) return false;
-  if (f.country && r.country !== f.country) return false;
-  if (f.cohort && cohortOf(r) !== f.cohort) return false;
-  if (f.abandon && !(r.abandons > 0)) return false;
-  return true;
-}
-
-/** 规则分群：R=距今天数，F=订单数，M=净 LTV。阈值可按业务调整。 */
-export function segmentOf(r: CustomerRow): SegmentKey {
-  const d = r.daysSince ?? 9999;
-  if (r.orders === 0) return '弃购未成交';
-  if (r.ltv <= 0) return '全退款';
-  if (r.orders >= 2) {
-    if (d > 90) return '重点召回';
-    if ((r.orders >= 3 || r.ltv >= 100) && d <= 60) return '高价值忠诚';
-    return '复购活跃';
-  }
-  if (d <= 30) return '新客(30天内)';
-  if (d <= 90) return '待二购';
-  return '沉睡单购';
-}
+// 分群与筛选规则已抽到 @/lib/customer-segmentation：页面与服务端必须共用同一份实现，
+// 否则同一组筛选条件在页面和受众快照里会算出不同人数。
+// 这里继续转出原来的名字，已有调用方（CustomersView 等）无需改动导入路径。
+export { FILTER_LABELS, SEGMENTS, cohortOf, matchFilters, segmentOf };
+export type { FilterKey, Filters, SegmentKey };
 
 type Group = { key: string; n: number; revenue: number; avgLtv: number; repeatRate: number; refundRate: number };
 
@@ -86,13 +57,19 @@ function GroupTable({
   labelHead,
   activeKey,
   onPick,
+  step,
 }: {
   title: string;
   groups: Group[];
   labelHead: string;
   activeKey?: string;
   onPick: (key: string) => void;
+  /** 传入后默认只显示前 step 行，底部「加载更多」每次再加 step 行，直到全部展示 */
+  step?: number;
 }) {
+  const [limit, setLimit] = useState(step ?? Infinity);
+  const shown = step ? groups.slice(0, limit) : groups;
+  const remaining = groups.length - shown.length;
   const maxLtv = Math.max(...groups.map((g) => g.avgLtv), 0);
   const maxRep = Math.max(...groups.map((g) => g.repeatRate), 0);
   return (
@@ -109,7 +86,7 @@ function GroupTable({
           </tr>
         </thead>
         <tbody>
-          {groups.map((g) => (
+          {shown.map((g) => (
             <tr key={g.key} className={activeKey === g.key ? 'active' : ''} onClick={() => onPick(g.key)}>
               <td>{g.key}</td>
               <td className="n">{int(g.n)}</td>
@@ -124,6 +101,21 @@ function GroupTable({
           ))}
         </tbody>
       </table>
+      {step && groups.length > step && (
+        <div className="muted" style={{ padding: '8px 0', textAlign: 'center' }}>
+          {remaining > 0 ? (
+            <>
+              已显示 {shown.length} / {groups.length}{' '}
+              <button className="link-underline" onClick={() => setLimit((n) => n + step)}>加载更多（再 {Math.min(step, remaining)} 条）</button>
+            </>
+          ) : (
+            <>
+              已显示全部 {groups.length} 条{' '}
+              <button className="link-underline" onClick={() => setLimit(step)}>收起</button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -276,8 +268,8 @@ export function CustomerInsights({
       </div>
 
       <div className="grid2">
-        <GroupTable title="渠道用户质量（获客成本需接入广告花费后补充）" groups={s.channels} labelHead="渠道" activeKey={filters.source} onPick={(k) => onToggle('source', k)} />
-        <GroupTable title="国家 / 地区" groups={s.countries} labelHead="国家" activeKey={filters.country} onPick={(k) => onToggle('country', k)} />
+        <GroupTable title="渠道用户质量（获客成本需接入广告花费后补充）" groups={s.channels} labelHead="渠道" activeKey={filters.source} onPick={(k) => onToggle('source', k)} step={10} />
+        <GroupTable title="国家 / 地区" groups={s.countries} labelHead="国家" activeKey={filters.country} onPick={(k) => onToggle('country', k)} step={10} />
       </div>
 
       <div className="panel">

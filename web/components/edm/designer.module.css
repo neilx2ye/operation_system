@@ -1,0 +1,914 @@
+/* EDM 模板设计器。类名一律局部（camelCase），颜色沿用 globals.css 里的变量与既有配色。 */
+
+.page {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---------- 顶部模板信息 ---------- */
+
+.head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.headTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.headMeta {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.headHint {
+  padding-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.backLink {
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nameInput {
+  width: 280px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+}
+
+.nameInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.25);
+}
+
+.metaField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.headMeta .metaField .textInput {
+  width: 280px;
+}
+
+/* ---------- 通用控件 ---------- */
+
+.smallBtn,
+.primaryBtn,
+.dangerBtn {
+  padding: 5px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.smallBtn:hover:not(:disabled),
+.dangerBtn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.primaryBtn {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.dangerBtn {
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.dangerBtn:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.smallBtn:disabled,
+.primaryBtn:disabled,
+.dangerBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.linkBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.textInput,
+.textarea,
+.select {
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  min-width: 0;
+}
+
+.textInput:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.25);
+}
+
+.textarea {
+  font: 12px/1.5 ui-monospace, Consolas, monospace;
+  resize: vertical;
+}
+
+.select {
+  cursor: pointer;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.dirtyBadge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.badgeGreen {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tagPill {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font: 12px ui-monospace, Consolas, monospace;
+}
+
+/* ---------- 提示条 ---------- */
+
+.noticeOk,
+.noticeErr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.noticeOk {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.noticeErr {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.infoBox {
+  padding: 8px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+}
+
+.warnBox {
+  padding: 8px 10px;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.errBox {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.emptyBox {
+  padding: 20px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---------- 工作区 ---------- */
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 470px);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.panelCard {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+.previewBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.previewNote {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.segGroup {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.seg,
+.segOn {
+  padding: 4px 10px;
+  border: none;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seg + .seg,
+.segOn + .seg,
+.seg + .segOn {
+  border-left: 1px solid #cbd5e1;
+}
+
+.segOn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.previewStage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: #eef1f5;
+}
+
+.previewInner {
+  margin: 0 auto;
+}
+
+.previewScaler {
+  min-height: 100%;
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+/* ---------- 右侧面板 ---------- */
+
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+.tabBar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab,
+.tabOn {
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tabOn {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panelBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+.codeTab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
+/* ---------- 源码编辑器 ---------- */
+
+.editorWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.editorBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.editorBody {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editorStatus {
+  min-height: 28px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.statusOk {
+  color: #15803d;
+}
+
+.statusErr {
+  color: #b91c1c;
+}
+
+/* ---------- 检查结果 ---------- */
+
+.lintHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.lintStrip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 108px;
+  overflow: auto;
+}
+
+.lintEmpty {
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lintError,
+.lintWarn {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.lintError {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.lintWarn {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.lintLevel {
+  flex: none;
+  font-weight: 600;
+}
+
+.lintRule {
+  flex: none;
+  font: 12px ui-monospace, Consolas, monospace;
+  opacity: 0.8;
+}
+
+.lintMessage {
+  word-break: break-word;
+}
+
+/* ---------- 元素面板 ---------- */
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inspectorHead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inspectorTitle {
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.inspectorMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.sectionTitle {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.codeHint {
+  max-height: 120px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font: 12px/1.5 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 素材库 ---------- */
+
+.assetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.assetCell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.assetPick {
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.assetPick:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.assetThumb {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.assetName {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assetMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.assetDelete {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--neg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ---------- 版本历史 ---------- */
+
+.versionPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.versionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.versionItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.versionItemOn {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.versionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.versionNote {
+  color: var(--ink);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.versionMeta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- 差异对比 ---------- */
+
+.diffWrap {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 12px/1.5 ui-monospace, Consolas, monospace;
+}
+
+.diffRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.diffCell {
+  min-height: 18px;
+  margin: 0;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diffDel {
+  background: #fee2e2;
+}
+
+.diffAdd {
+  background: #dcfce7;
+}
+
+.diffEmpty {
+  background: #f8fafc;
+}
+
+/* ---------- 弹窗 ---------- */
+
+.modalMask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 0.45);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 720px;
+  max-width: 100%;
+  max-height: 100%;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.3);
+}
+
+.modalWide {
+  width: 1100px;
+}
+
+.modalHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.modalFoot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.modalHint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.placeholderNote {
+  padding: 14px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---------- 受众 / Klaviyo 面板 ---------- */
+
+.filterGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.kvGrid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.kvK {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.kvV {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.metricCell {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.metricLabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.metricValue {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mono {
+  font: 12px ui-monospace, Consolas, monospace;
+  word-break: break-all;
+}
+
+.stepItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.statusBad,
+.statusWarn {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.statusBad {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.statusWarn {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+/* ---------- 窄屏回退 ---------- */
+
+@media (max-width: 1180px) {
+  .page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+
+  .previewStage {
+    height: 520px;
+  }
+
+  .rightCol {
+    height: 720px;
+  }
+}

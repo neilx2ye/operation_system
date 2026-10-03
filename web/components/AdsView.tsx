@@ -153,7 +153,7 @@ export function AdsView() {
       </div>
 
       <div className="muted" style={{ fontSize: 12 }}>
-        规则：盈亏平衡 ROAS = 1 ÷ 毛利率 = {BE_ROAS.toFixed(2)}；ROAS &lt; 盈亏平衡 → 砸预算；频次 ≥ 3 或 CTR 趋势 ≤ -15% → 换素材；ROAS ≥ 1.5× 且频次/CTR 健康 → 加预算。毛利率在 lib/trafficMock.ts 的 GROSS_MARGIN 中修改。当前为 Mock 数据。
+        规则：盈亏平衡 ROAS = 1 ÷ 毛利率 = {BE_ROAS.toFixed(2)}；ROAS &lt; 盈亏平衡 → 砸预算；频次 ≥ 3 或 CTR 趋势 ≤ -15% → 换素材；ROAS ≥ 1.5× 且频次/CTR 健康 → 加预算。毛利率在 lib/trafficMock.ts 的 GROSS_MARGIN 中修改。广告花费与平台归因需接入 Google / Meta / TikTok 广告 API，当前为 Mock 数据；Shopify 站内数据请见「站内分析」。
       </div>
     </div>
   );

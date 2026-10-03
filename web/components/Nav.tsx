@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useHotReload } from '@/lib/useHotReload';
@@ -8,6 +8,8 @@ import { useHotReload } from '@/lib/useHotReload';
 type Item = { label: string; href: string };
 type Group = { label: string; children: Item[] };
 type Entry = Item | Group;
+
+type DataSource = { source: 'shopify' | 'mock'; syncedAt: string | null; counts: { products: number; customers: number; orders: number } };
 
 /** 导航结构：有 children 的为可折叠分组，否则为普通链接 */
 const NAV: Entry[] = [
@@ -19,7 +21,14 @@ const NAV: Entry[] = [
       { href: '/manage', label: '产品管理' },
     ],
   },
-  { href: '/customers', label: '用户分析' },
+  {
+    label: '用户',
+    children: [
+      { href: '/customers', label: '用户分析' },
+      { href: '/users', label: '用户管理' },
+      { href: '/edm', label: 'EDM 邮件设计' },
+    ],
+  },
   {
     label: '流量',
     children: [
@@ -34,15 +43,29 @@ const isGroup = (e: Entry): e is Group => 'children' in e;
 
 export function Nav() {
   const pathname = usePathname();
-  const { status } = useHotReload();
+  const { status, version } = useHotReload();
+  const [data, setData] = useState<DataSource | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const on = (href: string) => pathname.startsWith(href);
+
+  useEffect(() => {
+    fetch('/api/data-source')
+      .then((r) => r.json())
+      .then(setData)
+      .catch(() => {});
+  }, [version]);
+
+  const brand = !data
+    ? '加载中…'
+    : data.source === 'shopify'
+      ? `真实数据 · Shopify 同步于 ${data.syncedAt ? data.syncedAt.slice(0, 16).replace('T', ' ') : '—'}`
+      : '演示数据 (Mock)';
 
   return (
     <header>
       <b>OPS 电商管理</b>
       <span className="brand-sub">
-        MVP · Mock 数据
+        {brand}
         {status !== 'off' && (
           <>
             {' · '}

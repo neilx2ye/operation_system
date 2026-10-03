@@ -1,14 +1,25 @@
-// OPS mock 数据源：确定性伪随机生成产品/客户/订单，并聚合成表格所需的行。
-// 后续接 Shopify / CSV 时，只需替换本文件顶部的数据来源，聚合逻辑可保持不变。
+// OPS 数据源：优先读取 data/shopify-cache.json（Shopify 全量同步的产物）作为真实数据源，
+// 缓存不存在时退回确定性伪随机的 Mock 数据。
+// 同步写盘后（缓存文件 mtime 变化）按需重建内存数据，因此同步完成后无需重启服务即可看到真实数据。
+// 聚合逻辑与 Mock 时期保持一致，只替换顶部数据来源。
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-type CachedCustomer = Customer & { name?: string; phone?: string };
+type CachedCustomer = Customer & { name?: string; phone?: string; tags?: string[] };
 type CachedOrder = Order & {
   shipping?: { name: string; phone: string; line1: string; line2: string; city: string; state: string; zip: string; country: string };
+  /** Shopify 同步得到的物流/履约状态；旧缓存缺失时由页面按本地运单记录补齐。 */
+  logisticsStatus?: string;
 };
-type ShopifyCache = { products: Product[]; customers: CachedCustomer[]; orders: CachedOrder[]; abandons: Abandon[] };
+type ShopifyCache = {
+  syncedAt?: string;
+  shop?: string;
+  products: Product[];
+  customers: CachedCustomer[];
+  orders: CachedOrder[];
+  abandons: Abandon[];
+};
 const SHOPIFY_CACHE_FILE = path.join(process.cwd(), 'data', 'shopify-cache.json');
 
 const DAY = 86_400_000;
@@ -23,8 +34,7 @@ function rng(seed: number) {
   };
 }
 
-const rand = rng(42);
-const NOW = Date.now();
+let NOW = Date.now();
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -42,6 +52,8 @@ export type Product = {
   variant: string;
   /** SKU 编码 */
   sku: string;
+  /** Shopify 商品/变体图片；Mock 或旧缓存可能为空。 */
+  imageUrl?: string;
   /** 单件重量(克),0 表示未填写;推云途订单时按 数量 × 单件重量 汇总包裹重量 */
   weightG: number;
   /** 当前库存件数 */
@@ -66,6 +78,8 @@ export type Customer = {
   email: string;
   country: string;
   source: string;
+  /** Shopify 同步缓存中的 Customer.tags；Mock 数据为空。 */
+  tags?: string[];
 };
 
 export type Abandon = {
@@ -81,6 +95,9 @@ export type OrderItem = {
   price: number;
   refunded: boolean;
   refundAt: number | null;
+  /** 下单时的 Item 名称与图片，避免商品后续改名/删除后列表失真。 */
+  title?: string;
+  imageUrl?: string;
 };
 
 export type Order = {
@@ -91,7 +108,7 @@ export type Order = {
   items: OrderItem[];
 };
 
-// ---------- Mock 数据源（后续可替换为 Shopify 同步或 CSV 导入） ----------
+// ---------- Mock 数据源（缓存缺失时使用） ----------
 
 // [SPU 产品名, 变体名(单变体留空), 类目, 售价, 成本, 退款概率, 热度]
 // 每个 SKU 是一行；多变体 SPU 的展示名 = 「产品名 - 变体名」
@@ -140,6 +157,8 @@ const MOCK_PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
   status: 'active' as ProductStatus,
 }));
 
+// ---------- 数据来源（Shopify 缓存优先，文件变化时重建） ----------
+
 function loadShopifyCache(): ShopifyCache | null {
   try {
     const raw = JSON.parse(fs.readFileSync(SHOPIFY_CACHE_FILE, 'utf8'));
@@ -150,9 +169,31 @@ function loadShopifyCache(): ShopifyCache | null {
   }
 }
 
-const shopifyCache = loadShopifyCache();
-export const DATA_SOURCE = shopifyCache ? 'shopify' : 'mock';
-export const PRODUCTS: Product[] = shopifyCache?.products || MOCK_PRODUCTS;
+let dataMtime = -1;
+let shopifyCache: ShopifyCache | null = null;
+export let DATA_SOURCE: 'shopify' | 'mock' = 'mock';
+export let PRODUCTS: Product[] = MOCK_PRODUCTS;
+export let CUSTOMERS: Customer[] = [];
+let ALL_CUSTOMERS: Customer[] = [];
+let ORDERS: CachedOrder[] = [];
+let ABANDONS: Abandon[] = [];
+let CATALOG_DEFAULTS: Record<string, Required<CatalogPatch>> = {};
+
+function cacheMtime(): number {
+  try {
+    return fs.statSync(SHOPIFY_CACHE_FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/** 缓存文件变化（例如刚完成 Shopify 同步）时重建内存里的数据与派生聚合 */
+function ensureData() {
+  const m = cacheMtime();
+  if (m === dataMtime) return;
+  dataMtime = m;
+  rebuild();
+}
 
 // ---------- 产品目录（可编辑参数，持久化到 data/catalog.json，文件为准） ----------
 
@@ -178,8 +219,6 @@ const pickFields = (p: Product): Required<CatalogPatch> => ({
   supplier: p.supplier,
   status: p.status,
 });
-
-const CATALOG_DEFAULTS: Record<string, Required<CatalogPatch>> = Object.fromEntries(PRODUCTS.map((p) => [p.id, pickFields(p)]));
 
 function sanitize(raw: Record<string, unknown>): CatalogPatch {
   const num = (v: unknown, whole = false) => {
@@ -247,12 +286,14 @@ export function syncCatalog() {
 }
 
 export function catalogRows(): CatalogRow[] {
+  ensureData();
   syncCatalog();
   return PRODUCTS.map((p) => ({ id: p.id, title: p.title, ...pickFields(p) }));
 }
 
 /** 批量更新：{ 产品id: { 字段: 值 } }。校验失败会抛错且不写文件。返回更新的 SKU 数。 */
 export function updateCatalog(patches: Record<string, Record<string, unknown>>): number {
+  ensureData();
   syncCatalog();
   const ov = readOverrides();
   let n = 0;
@@ -276,91 +317,92 @@ export function updateCatalog(patches: Record<string, Record<string, unknown>>):
   return n;
 }
 
+// ---------- Mock 生成（仅缓存缺失时使用） ----------
+
 const COUNTRIES = ['US', 'US', 'US', 'US', 'CA', 'UK', 'UK', 'AU', 'DE'];
 const SOURCES = ['google', 'google', 'meta', 'meta', 'tiktok', 'organic', 'email'];
 
-const pick = <T,>(a: readonly T[]): T => a[Math.floor(rand() * a.length)];
+function buildMock(): { products: Product[]; customers: Customer[]; allCustomers: Customer[]; orders: Order[]; abandons: Abandon[] } {
+  const rand = rng(42);
+  const pick = <T,>(a: readonly T[]): T => a[Math.floor(rand() * a.length)];
 
-const MOCK_CUSTOMERS: Customer[] = Array.from({ length: 150 }, (_, i) => ({
-  id: 'c' + (i + 1),
-  email: 'user' + (i + 1) + '@example.com',
-  country: pick(COUNTRIES),
-  source: pick(SOURCES),
-}));
-export const CUSTOMERS: Customer[] = shopifyCache?.customers || MOCK_CUSTOMERS;
+  const products: Product[] = MOCK_PRODUCTS.map((p) => ({ ...p }));
 
-const weightedPool: number[] = [];
-PRODUCTS.forEach((p, i) => {
-  for (let k = 0; k < p.pop; k++) weightedPool.push(i);
-});
+  const customers: Customer[] = Array.from({ length: 150 }, (_, i) => ({
+    id: 'c' + (i + 1),
+    email: 'user' + (i + 1) + '@example.com',
+    country: pick(COUNTRIES),
+    source: pick(SOURCES),
+  }));
 
-const MOCK_ORDERS: Order[] = [];
-CUSTOMERS.forEach((c) => {
-  const n = 1 + (rand() < 0.3 ? 1 + Math.floor(rand() * 3) : 0);
-  let t = NOW - Math.floor(rand() * 170) * DAY - Math.floor(rand() * DAY);
-  for (let k = 0; k < n && t <= NOW; k++) {
+  const weightedPool: number[] = [];
+  products.forEach((p, i) => {
+    for (let k = 0; k < p.pop; k++) weightedPool.push(i);
+  });
+
+  const orders: Order[] = [];
+  customers.forEach((c) => {
+    const n = 1 + (rand() < 0.3 ? 1 + Math.floor(rand() * 3) : 0);
+    let t = NOW - Math.floor(rand() * 170) * DAY - Math.floor(rand() * DAY);
+    for (let k = 0; k < n && t <= NOW; k++) {
+      const first = pick(weightedPool);
+      const idx = [first];
+      if (rand() < 0.35) {
+        const mate = first ^ 1;
+        if (mate < products.length && products[mate].spu !== products[first].spu) idx.push(mate);
+      } else if (rand() < 0.2) idx.push(pick(weightedPool));
+      const items: OrderItem[] = [...new Set(idx)].map((i) => {
+        const p = products[i];
+        const qty = rand() < 0.15 ? 2 : 1;
+        const refunded = rand() < p.refundProb;
+        const refundAt = refunded ? Math.min(NOW, t + (3 + Math.floor(rand() * 12)) * DAY) : null;
+        return { productId: p.id, qty, price: p.price, refunded, refundAt };
+      });
+      orders.push({ id: '', customerId: c.id, t, items });
+      t += (10 + Math.floor(rand() * 50)) * DAY;
+    }
+  });
+  orders.sort((a, b) => a.t - b.t);
+  orders.forEach((o, i) => {
+    o.id = '#' + (1001 + i);
+  });
+
+  // 弃购：leads 是只弃购、从未下单的潜在用户；老客也可能有弃购记录（不影响上面已生成的订单数据）
+  const leads: Customer[] = Array.from({ length: 45 }, (_, i) => ({
+    id: 'l' + (i + 1),
+    email: 'lead' + (i + 1) + '@example.com',
+    country: pick(COUNTRIES),
+    source: pick(SOURCES),
+  }));
+
+  const abandons: Abandon[] = [];
+  const makeAbandon = (customerId: string, t: number) => {
     const first = pick(weightedPool);
-    const idx = [first];
-    if (rand() < 0.35) {
-      const mate = first ^ 1;
-      if (mate < PRODUCTS.length && PRODUCTS[mate].spu !== PRODUCTS[first].spu) idx.push(mate);
-    } else if (rand() < 0.2) idx.push(pick(weightedPool));
-    const items: OrderItem[] = [...new Set(idx)].map((i) => {
-      const p = PRODUCTS[i];
-      const qty = rand() < 0.15 ? 2 : 1;
-      const refunded = rand() < p.refundProb;
-      const refundAt = refunded ? Math.min(NOW, t + (3 + Math.floor(rand() * 12)) * DAY) : null;
-      return { productId: p.id, qty, price: p.price, refunded, refundAt };
-    });
-    MOCK_ORDERS.push({ id: '', customerId: c.id, t, items });
-    t += (10 + Math.floor(rand() * 50)) * DAY;
-  }
-});
-MOCK_ORDERS.sort((a, b) => a.t - b.t);
-MOCK_ORDERS.forEach((o, i) => {
-  o.id = '#' + (1001 + i);
-});
+    const items = [{ productId: products[first].id, qty: rand() < 0.2 ? 2 : 1 }];
+    if (rand() < 0.3) {
+      const second = pick(weightedPool);
+      if (second !== first) items.push({ productId: products[second].id, qty: 1 });
+    }
+    const value = items.reduce((s, it) => s + it.qty * products[Number(it.productId.slice(1)) - 1].price, 0);
+    abandons.push({ customerId, t, value, items });
+  };
 
-// 弃购：LEADS 是只弃购、从未下单的潜在用户；老客也可能有弃购记录（不影响上面已生成的订单数据）
-const MOCK_LEADS: Customer[] = Array.from({ length: 45 }, (_, i) => ({
-  id: 'l' + (i + 1),
-  email: 'lead' + (i + 1) + '@example.com',
-  country: pick(COUNTRIES),
-  source: pick(SOURCES),
-}));
-const LEADS: Customer[] = shopifyCache ? [] : MOCK_LEADS;
-const ALL_CUSTOMERS: Customer[] = shopifyCache?.customers || [...CUSTOMERS, ...LEADS];
-const MOCK_ABANDONS: Abandon[] = [];
+  leads.forEach((l) => {
+    const n = rand() < 0.3 ? 2 : 1;
+    for (let k = 0; k < n; k++) makeAbandon(l.id, NOW - Math.floor(rand() * 60) * DAY - Math.floor(rand() * DAY));
+  });
+  customers.forEach((c) => {
+    if (rand() < 0.2) makeAbandon(c.id, NOW - Math.floor(rand() * 120) * DAY - Math.floor(rand() * DAY));
+  });
+  abandons.sort((a, b) => a.t - b.t);
 
-function makeAbandon(customerId: string, t: number) {
-  const first = pick(weightedPool);
-  const items = [{ productId: PRODUCTS[first].id, qty: rand() < 0.2 ? 2 : 1 }];
-  if (rand() < 0.3) {
-    const second = pick(weightedPool);
-    if (second !== first) items.push({ productId: PRODUCTS[second].id, qty: 1 });
-  }
-  const value = items.reduce((s, it) => s + it.qty * PRODUCTS[Number(it.productId.slice(1)) - 1].price, 0);
-  MOCK_ABANDONS.push({ customerId, t, value, items });
+  return { products, customers, allCustomers: [...customers, ...leads], orders, abandons };
 }
 
-MOCK_LEADS.forEach((l) => {
-  const n = rand() < 0.3 ? 2 : 1;
-  for (let k = 0; k < n; k++) makeAbandon(l.id, NOW - Math.floor(rand() * 60) * DAY - Math.floor(rand() * DAY));
-});
-MOCK_CUSTOMERS.forEach((c) => {
-  if (rand() < 0.2) makeAbandon(c.id, NOW - Math.floor(rand() * 120) * DAY - Math.floor(rand() * DAY));
-});
-MOCK_ABANDONS.sort((a, b) => a.t - b.t);
+// ---------- 派生聚合状态 ----------
 
-const ORDERS: CachedOrder[] = shopifyCache?.orders || MOCK_ORDERS;
-const ABANDONS: Abandon[] = shopifyCache?.abandons || MOCK_ABANDONS;
-
-// ---------- 聚合 ----------
-
-const pById: Record<string, Product> = Object.fromEntries(PRODUCTS.map((p) => [p.id, p]));
-const cById: Record<string, Customer> = Object.fromEntries(ALL_CUSTOMERS.map((c) => [c.id, c]));
-
-const WEEKS = 26;
+let pById: Record<string, Product> = {};
+let cById: Record<string, Customer> = {};
 
 type ProductStats = {
   units: number;
@@ -383,58 +425,135 @@ type CustomerStats = {
   products: Map<string, { units: number; amount: number }>;
 };
 
-const PS: Record<string, ProductStats> = {};
-const CS: Record<string, CustomerStats> = {};
-PRODUCTS.forEach((p) => {
-  PS[p.id] = {
-    units: 0,
-    gross: 0,
-    refUnits: 0,
-    refAmt: 0,
-    buyers: new Map(),
-    weekly: Array(WEEKS).fill(0),
-    r30: 0,
-    p30: 0,
-  };
-});
-ALL_CUSTOMERS.forEach((c) => {
-  CS[c.id] = { orders: 0, gross: 0, refAmt: 0, refunds: 0, first: null, last: null, products: new Map() };
-});
+const WEEKS = 26;
 
-ORDERS.forEach((o) => {
-  const c = CS[o.customerId];
-  c.orders++;
-  if (c.first === null || o.t < c.first) c.first = o.t;
-  if (c.last === null || o.t > c.last) c.last = o.t;
-  const age = NOW - o.t;
-  o.items.forEach((it) => {
-    const s = PS[it.productId];
-    const amt = it.qty * it.price;
-    const net = it.refunded ? 0 : amt;
-    s.units += it.qty;
-    s.gross += amt;
-    if (it.refunded) {
-      s.refUnits += it.qty;
-      s.refAmt += amt;
-      c.refunds += it.qty;
-      c.refAmt += amt;
-    }
-    const b = s.buyers.get(o.customerId) || { orders: 0, units: 0, amount: 0 };
-    b.orders++;
-    b.units += it.qty;
-    b.amount += net;
-    s.buyers.set(o.customerId, b);
-    const w = Math.floor(age / (7 * DAY));
-    if (w < WEEKS) s.weekly[WEEKS - 1 - w] += net;
-    if (age < 30 * DAY) s.r30 += net;
-    else if (age < 60 * DAY) s.p30 += net;
-    c.gross += amt;
-    const cp = c.products.get(it.productId) || { units: 0, amount: 0 };
-    cp.units += it.qty;
-    cp.amount += net;
-    c.products.set(it.productId, cp);
+let PS: Record<string, ProductStats> = {};
+let CS: Record<string, CustomerStats> = {};
+let custSets: Record<string, Set<string>> = {};
+let pairCount: Record<string, number> = {};
+let prodCust: Record<string, number> = {};
+let AB: Record<string, Abandon[]> = {};
+
+function rebuild() {
+  const cache = loadShopifyCache();
+  shopifyCache = cache;
+  NOW = Date.now();
+
+  if (cache) {
+    DATA_SOURCE = 'shopify';
+    PRODUCTS = cache.products;
+    CUSTOMERS = cache.customers;
+    ALL_CUSTOMERS = cache.customers;
+    ORDERS = cache.orders;
+    ABANDONS = cache.abandons;
+  } else {
+    const m = buildMock();
+    DATA_SOURCE = 'mock';
+    PRODUCTS = m.products;
+    CUSTOMERS = m.customers;
+    ALL_CUSTOMERS = m.allCustomers;
+    ORDERS = m.orders;
+    ABANDONS = m.abandons;
+  }
+
+  CATALOG_DEFAULTS = Object.fromEntries(PRODUCTS.map((p) => [p.id, pickFields(p)]));
+  catalogMtime = -1;
+
+  pById = Object.fromEntries(PRODUCTS.map((p) => [p.id, p]));
+  cById = Object.fromEntries(ALL_CUSTOMERS.map((c) => [c.id, c]));
+
+  PS = {};
+  CS = {};
+  PRODUCTS.forEach((p) => {
+    PS[p.id] = {
+      units: 0,
+      gross: 0,
+      refUnits: 0,
+      refAmt: 0,
+      buyers: new Map(),
+      weekly: Array(WEEKS).fill(0),
+      r30: 0,
+      p30: 0,
+    };
   });
-});
+  ALL_CUSTOMERS.forEach((c) => {
+    CS[c.id] = { orders: 0, gross: 0, refAmt: 0, refunds: 0, first: null, last: null, products: new Map() };
+  });
+
+  ORDERS.forEach((o) => {
+    const c = CS[o.customerId];
+    if (!c) return;
+    c.orders++;
+    if (c.first === null || o.t < c.first) c.first = o.t;
+    if (c.last === null || o.t > c.last) c.last = o.t;
+    const age = NOW - o.t;
+    o.items.forEach((it) => {
+      const s = PS[it.productId];
+      if (!s) return;
+      const amt = it.qty * it.price;
+      const net = it.refunded ? 0 : amt;
+      s.units += it.qty;
+      s.gross += amt;
+      if (it.refunded) {
+        s.refUnits += it.qty;
+        s.refAmt += amt;
+        c.refunds += it.qty;
+        c.refAmt += amt;
+      }
+      const b = s.buyers.get(o.customerId) || { orders: 0, units: 0, amount: 0 };
+      b.orders++;
+      b.units += it.qty;
+      b.amount += net;
+      s.buyers.set(o.customerId, b);
+      const w = Math.floor(age / (7 * DAY));
+      if (w >= 0 && w < WEEKS) s.weekly[WEEKS - 1 - w] += net;
+      if (age < 30 * DAY) s.r30 += net;
+      else if (age < 60 * DAY) s.p30 += net;
+      c.gross += amt;
+      const cp = c.products.get(it.productId) || { units: 0, amount: 0 };
+      cp.units += it.qty;
+      cp.amount += net;
+      c.products.set(it.productId, cp);
+    });
+  });
+
+  AB = {};
+  ABANDONS.forEach((a) => {
+    (AB[a.customerId] = AB[a.customerId] || []).push(a);
+  });
+
+  custSets = {};
+  ORDERS.forEach((o) => {
+    custSets[o.customerId] = custSets[o.customerId] || new Set();
+    o.items.forEach((it) => custSets[o.customerId].add(it.productId));
+  });
+
+  pairCount = {};
+  prodCust = {};
+  Object.keys(custSets).forEach((cid) => {
+    const arr = [...custSets[cid]].sort();
+    arr.forEach((a) => {
+      prodCust[a] = (prodCust[a] || 0) + 1;
+    });
+    for (let i = 0; i < arr.length; i++) {
+      for (let j = i + 1; j < arr.length; j++) {
+        const key = arr[i] + '|' + arr[j];
+        pairCount[key] = (pairCount[key] || 0) + 1;
+      }
+    }
+  });
+}
+
+/** 当前数据源概览：来源、同步时间、行数 */
+export function dataSourceInfo() {
+  ensureData();
+  return {
+    source: DATA_SOURCE,
+    syncedAt: shopifyCache?.syncedAt ?? null,
+    shop: shopifyCache?.shop ?? null,
+    counts: { products: PRODUCTS.length, customers: ALL_CUSTOMERS.length, orders: ORDERS.length, abandons: ABANDONS.length },
+  };
+}
 
 // ---------- 行视图 ----------
 
@@ -469,6 +588,8 @@ export type CustomerRow = {
   abandons: number;
   abandonValue: number;
   lastAbandon: string | null;
+  /** Shopify Customer.tags；Mock 数据为空数组。 */
+  shopifyTags: string[];
 };
 
 export type RelationRow = {
@@ -570,17 +691,13 @@ function productRowR(p: Product, from: number, to: number): ProductRow {
 }
 
 export function parseRange(from?: string | null, to?: string | null): Range | null {
+  ensureData();
   if (!from && !to) return null;
-  const f = from ? new Date(from + 'T00:00:00').getTime() : ORDERS[0].t;
+  const f = from ? new Date(from + 'T00:00:00').getTime() : ORDERS[0]?.t ?? NOW;
   const t = to ? new Date(to + 'T23:59:59.999').getTime() : Date.now();
   if (Number.isNaN(f) || Number.isNaN(t)) return null;
   return { from: f, to: t };
 }
-
-const AB: Record<string, Abandon[]> = {};
-ABANDONS.forEach((a) => {
-  (AB[a.customerId] = AB[a.customerId] || []).push(a);
-});
 
 function customerRow(c: Customer): CustomerRow {
   const s = CS[c.id];
@@ -599,33 +716,14 @@ function customerRow(c: Customer): CustomerRow {
     abandons: ab.length,
     abandonValue: r2(ab.reduce((sum, a) => sum + a.value, 0)),
     lastAbandon: ab.length ? new Date(ab[ab.length - 1].t).toISOString().slice(0, 10) : null,
+    shopifyTags: Array.isArray(c.tags) ? c.tags : [],
   };
 }
 
 // ---------- 关联分析（共同购买） ----------
 
-const custSets: Record<string, Set<string>> = {};
-ORDERS.forEach((o) => {
-  custSets[o.customerId] = custSets[o.customerId] || new Set();
-  o.items.forEach((it) => custSets[o.customerId].add(it.productId));
-});
-
-const pairCount: Record<string, number> = {};
-const prodCust: Record<string, number> = {};
-Object.keys(custSets).forEach((cid) => {
-  const arr = [...custSets[cid]].sort();
-  arr.forEach((a) => {
-    prodCust[a] = (prodCust[a] || 0) + 1;
-  });
-  for (let i = 0; i < arr.length; i++) {
-    for (let j = i + 1; j < arr.length; j++) {
-      const key = arr[i] + '|' + arr[j];
-      pairCount[key] = (pairCount[key] || 0) + 1;
-    }
-  }
-});
-
 export function relations(productId?: string | null): RelationRow[] {
+  ensureData();
   syncCatalog();
   const N = CUSTOMERS.length;
   return Object.keys(pairCount)
@@ -649,6 +747,7 @@ export function relations(productId?: string | null): RelationRow[] {
 // ---------- 详情 ----------
 
 export function productDetail(id: string, rg?: Range | null): ProductDetail | null {
+  ensureData();
   syncCatalog();
   const p = pById[id];
   if (!p) return null;
@@ -671,6 +770,7 @@ export function productDetail(id: string, rg?: Range | null): ProductDetail | nu
 }
 
 export function customerDetail(id: string): CustomerDetail | null {
+  ensureData();
   syncCatalog();
   const c = cById[id];
   if (!c) return null;
@@ -714,17 +814,21 @@ export function customerDetail(id: string): CustomerDetail | null {
 }
 
 export function allProductRows(rg?: Range | null): ProductRow[] {
+  ensureData();
   syncCatalog();
   return PRODUCTS.map((p) => (rg ? productRowR(p, rg.from, rg.to) : productRow(p)));
 }
 
 export function allCustomerRows(): CustomerRow[] {
+  ensureData();
   return ALL_CUSTOMERS.map(customerRow);
 }
 
 // ---------- 订单 ----------
 
 export type OrderStatus = '已完成' | '部分退款' | '已退款';
+
+export type OrderItemPreview = { product: string; imageUrl: string; qty: number };
 
 export type OrderRow = {
   id: string;
@@ -734,19 +838,22 @@ export type OrderRow = {
   source: string;
   date: string;
   items: number;
-  /** 订单内所有 SKU，格式：OPS-001 x2, OPS-005 x1 */
+  /** 保留给发货/后台逻辑使用，订单列表不再展示 SKU 列。 */
   skus: string;
+  /** 订单列表展示的具体 Item（同一商品因退款拆分的行会重新合并数量）。 */
+  orderItems: OrderItemPreview[];
   gross: number;
   refunded: number;
   net: number;
   status: OrderStatus;
+  logisticsStatus: string;
 };
 
 export type OrderDetail = OrderRow & {
   profit: number;
   customer: { id: string; name: string; email: string; phone: string; country: string; source: string; orders: number; ltv: number; firstOrder: string | null };
   shipping: { name: string; phone: string; line1: string; line2: string; city: string; state: string; zip: string; country: string };
-  lines: { product: string; sku: string; weightG: number; qty: number; price: number; amount: number; refunded: boolean; refundDate: string | null }[];
+  lines: { product: string; imageUrl: string; sku: string; weightG: number; qty: number; price: number; amount: number; refunded: boolean; refundDate: string | null }[];
 };
 
 function orderStatus(o: Order): OrderStatus {
@@ -758,6 +865,16 @@ function orderRow(o: Order): OrderRow {
   const gross = o.items.reduce((s, it) => s + it.qty * it.price, 0);
   const refunded = o.items.reduce((s, it) => s + (it.refunded ? it.qty * it.price : 0), 0);
   const c = cById[o.customerId];
+  const grouped = new Map<string, OrderItemPreview>();
+  for (const it of o.items) {
+    const p = pById[it.productId];
+    const product = it.title || p?.title || '已删除商品';
+    const imageUrl = it.imageUrl || p?.imageUrl || '';
+    const key = it.productId + '\n' + product + '\n' + imageUrl;
+    const hit = grouped.get(key);
+    if (hit) hit.qty += it.qty;
+    else grouped.set(key, { product, imageUrl, qty: it.qty });
+  }
   return {
     id: o.id,
     customerId: o.customerId,
@@ -766,15 +883,18 @@ function orderRow(o: Order): OrderRow {
     source: c.source,
     date: new Date(o.t).toISOString().slice(0, 10),
     items: o.items.reduce((s, it) => s + it.qty, 0),
-    skus: o.items.map((it) => pById[it.productId].sku + ' x' + it.qty).join(', '),
+    skus: o.items.map((it) => (pById[it.productId]?.sku || '-') + ' x' + it.qty).join(', '),
+    orderItems: [...grouped.values()],
     gross: r2(gross),
     refunded: r2(refunded),
     net: r2(gross - refunded),
     status: orderStatus(o),
+    logisticsStatus: (o as CachedOrder).logisticsStatus || '未发货',
   };
 }
 
 export function allOrderRows(): OrderRow[] {
+  ensureData();
   syncCatalog();
   return ORDERS.map(orderRow).reverse();
 }
@@ -811,13 +931,15 @@ function shippingOf(c: Customer) {
 }
 
 export function orderDetail(id: string): OrderDetail | null {
+  ensureData();
   syncCatalog();
   const o = ORDERS.find((x) => x.id === id);
   if (!o) return null;
   const lines = o.items.map((it) => ({
-    product: pById[it.productId].title,
-    sku: pById[it.productId].sku,
-    weightG: pById[it.productId].weightG,
+    product: it.title || pById[it.productId]?.title || '已删除商品',
+    imageUrl: it.imageUrl || pById[it.productId]?.imageUrl || '',
+    sku: pById[it.productId]?.sku || '-',
+    weightG: pById[it.productId]?.weightG || 0,
     qty: it.qty,
     price: it.price,
     amount: r2(it.qty * it.price),
