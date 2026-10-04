@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { int, money, pct } from '@/lib/format';
 import { useHotReload } from '@/lib/useHotReload';
 import type { CatalogRow } from '@/lib/mock';
@@ -16,6 +16,26 @@ const STATUS = [
   { v: 'draft', l: '草稿' },
   { v: 'archived', l: '已下架' },
 ];
+const STATUS_LABEL: Record<string, string> = { active: '在售', draft: '草稿', archived: '已下架' };
+const statusTone = (s: string) => (s === 'active' ? 'green' : s === 'archived' ? 'red' : 'amber');
+
+const SPU_KEY = (v: string) => v.trim() || '(未命名)';
+const rangeMoney = (a: number, b: number) => (a === b ? money(a) : `${money(Math.min(a, b))} – ${money(Math.max(a, b))}`);
+const variantPreview = (names: string[]) => {
+  const list = names.map((n) => n.trim()).filter(Boolean);
+  if (!list.length) return '—';
+  const shown = list.slice(0, 3).join(' / ');
+  return list.length > 3 ? `${shown} +${list.length - 3}` : shown;
+};
+const rangePct = (a: number | null, b: number | null) => (a == null || b == null ? '-' : a === b ? pct(a) : `${pct(Math.min(a, b))} – ${pct(Math.max(a, b))}`);
+
+function Thumb({ imageUrl, name }: { imageUrl: string; name: string }) {
+  return (
+    <span className="catalog-thumb" title={name}>
+      {imageUrl ? <img src={imageUrl} alt={name} loading="lazy" /> : <span>无图</span>}
+    </span>
+  );
+}
 
 function parseCsv(input: string): string[][] {
   const text = input.replace(/^\uFEFF/, '');
@@ -56,6 +76,26 @@ const csvCell = (v: unknown) => {
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
 
+/** 同一 SPU 下多个 SKU 折叠为一行时的汇总信息。 */
+type SpuGroup = {
+  spu: string;
+  rows: CatalogRow[];
+  imageUrl: string;
+  category: string;
+  supplier: string;
+  /** 各 SKU 状态一致时为该状态，否则为 'mixed'。 */
+  status: string;
+  priceMin: number;
+  priceMax: number;
+  costMin: number;
+  costMax: number;
+  stock: number;
+  out: number;
+  low: number;
+  marginMin: number | null;
+  marginMax: number | null;
+};
+
 export function ManageView() {
   const [rows, setRows] = useState<CatalogRow[]>([]);
   const [draft, setDraft] = useState<Draft>({});
@@ -65,6 +105,7 @@ export function ManageView() {
   const [query, setQuery] = useState('');
   const [statusF, setStatusF] = useState('');
   const [onlyLow, setOnlyLow] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const fileRef = useRef<HTMLInputElement>(null);
   const { version } = useHotReload();
 
@@ -139,6 +180,79 @@ export function ManageView() {
     if (!q) return true;
     return [val(r, 'sku'), val(r, 'spu'), val(r, 'variant'), val(r, 'category'), val(r, 'supplier')].join(' ').toLowerCase().includes(q);
   });
+
+  /** 按 SPU 聚合（同一 SPU 的多个 SKU 折叠为一行；单 SKU 的 SPU 直接展示该行）。 */
+  const groups = useMemo(() => {
+    const map = new Map<string, CatalogRow[]>();
+    for (const r of visible) {
+      const key = SPU_KEY(val(r, 'spu'));
+      const arr = map.get(key);
+      if (arr) arr.push(r);
+      else map.set(key, [r]);
+    }
+    return [...map.entries()].map(([spu, rs]): SpuGroup => {
+      const prices = rs.map((r) => num(r, 'price'));
+      const costs = rs.map((r) => num(r, 'cost'));
+      const margins = rs
+        .map((r) => (num(r, 'price') > 0 ? (num(r, 'price') - num(r, 'cost')) / num(r, 'price') : null))
+        .filter((m): m is number => m != null);
+      const uniq = (f: F) => new Set(rs.map((r) => val(r, f)));
+      const cats = uniq('category');
+      const sups = uniq('supplier');
+      const stats = uniq('status');
+      let out = 0;
+      let low = 0;
+      for (const r of rs) {
+        const st = stockState(r);
+        if (st?.cls === 'red') out++;
+        else if (st?.cls === 'amber') low++;
+      }
+      return {
+        spu,
+        rows: rs,
+        imageUrl: rs.find((r) => r.imageUrl)?.imageUrl || '',
+        category: cats.size === 1 ? [...cats][0] : '多类目',
+        supplier: sups.size === 1 ? [...sups][0] : '多供应商',
+        status: stats.size === 1 ? [...stats][0] : 'mixed',
+        priceMin: Math.min(...prices),
+        priceMax: Math.max(...prices),
+        costMin: Math.min(...costs),
+        costMax: Math.max(...costs),
+        stock: rs.reduce((s, r) => s + num(r, 'stock'), 0),
+        out,
+        low,
+        marginMin: margins.length ? Math.min(...margins) : null,
+        marginMax: margins.length ? Math.max(...margins) : null,
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, draft]);
+
+  const multiSpus = groups.filter((g) => g.rows.length > 1).map((g) => g.spu);
+  const toggleSpu = (spu: string) =>
+    setExpanded((s) => {
+      const n = new Set(s);
+      if (n.has(spu)) n.delete(spu);
+      else n.add(spu);
+      return n;
+    });
+
+  // 搜索时自动展开命中的多 SKU SPU，方便直接看到匹配的变体。
+  useEffect(() => {
+    if (!query.trim()) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      groups.forEach((g) => {
+        if (g.rows.length > 1 && !next.has(g.spu)) {
+          next.add(g.spu);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   const save = async () => {
     if (!dirtyIds.length || hasInvalid) return;
@@ -226,12 +340,12 @@ export function ManageView() {
     <div className="content">
       <div className="insights">
         <div className="kpis">
-          <div className="kpi"><div className="kpi-label">SKU 总数</div><div className="kpi-value">{kpi.total}</div><div className="kpi-hint">在售 {kpi.active}</div></div>
+          <div className="kpi"><div className="kpi-label">SKU 总数</div><div className="kpi-value">{kpi.total}</div><div className="kpi-hint">在售 {kpi.active} · SPU {groups.length}</div></div>
           <div className="kpi"><div className="kpi-label">在售库存成本值 (USD)</div><div className="kpi-value">{money(kpi.value)}</div><div className="kpi-hint">库存 × 成本</div></div>
           <div className="kpi"><div className="kpi-label">缺货</div><div className={'kpi-value ' + (kpi.out ? 'neg' : '')}>{kpi.out}</div></div>
           <div className="kpi"><div className="kpi-label">需补货</div><div className="kpi-value">{kpi.low}</div><div className="kpi-hint">库存 ≤ 补货点</div></div>
           <div className="kpi"><div className="kpi-label">未填成本</div><div className={'kpi-value ' + (kpi.noCost ? 'neg' : '')}>{kpi.noCost}</div><div className="kpi-hint">成本为 0 会高估毛利</div></div>
-          <div className="kpi"><div className="kpi-label">未填重量</div><div className={'kpi-value ' + (kpi.noWeight ? 'neg' : '')}>{kpi.noWeight}</div><div className="kpi-hint">推云途单时按默认重量估算</div></div>
+          <div className="kpi"><div className="kpi-label">未填重量</div><div className={'kpi-value ' + (kpi.noWeight ? 'neg' : '')}>{kpi.noWeight}</div><div className="kpi-hint">发货时按默认重量估算</div></div>
         </div>
       </div>
 
@@ -244,6 +358,8 @@ export function ManageView() {
           ))}
         </select>
         <label><input type="checkbox" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} /> 只看缺货/需补货</label>
+        <button onClick={() => setExpanded(new Set(multiSpus))} disabled={!multiSpus.length}>展开全部</button>
+        <button onClick={() => setExpanded(new Set())} disabled={!expanded.size}>折叠全部</button>
         <button onClick={exportCsv}>导出 CSV</button>
         <button onClick={() => fileRef.current?.click()}>导入 CSV</button>
         <input
@@ -258,7 +374,7 @@ export function ManageView() {
           }}
         />
         <span className="spacer" />
-        <span className="muted">{loading ? '加载中...' : `${visible.length} / ${rows.length} 行`}</span>
+        <span className="muted">{loading ? '加载中...' : `${visible.length} 个 SKU / ${groups.length} 个 SPU`}</span>
         {dirtyIds.length > 0 && <span className="muted">待保存 {dirtyIds.length} 个 SKU</span>}
         <button disabled={!dirtyIds.length} onClick={() => setDraft({})}>放弃修改</button>
         <button className="primary" disabled={!dirtyIds.length || hasInvalid || saving} onClick={save}>
@@ -270,58 +386,104 @@ export function ManageView() {
       {hasInvalid && <div className="notice err">有字段不合法（红框）：数字需为大于等于 0 的数，SKU/产品名/类目不能为空</div>}
 
       <div className="table-wrap">
-        <table className="plain">
+        <table className="plain manage-table">
           <thead>
             <tr>
+              <th className="spu-toggle-cell" aria-label="展开 / 折叠"></th>
+              <th>图片</th>
               <th>SKU</th>
               <th>产品名（SPU）</th>
               <th>变体</th>
               <th>类目</th>
-              <th>售价 (USD)</th>
-              <th>成本 (USD)</th>
-              <th>重量 (g)</th>
+              <th className="n">售价 (USD)</th>
+              <th className="n">成本 (USD)</th>
+              <th className="n">重量 (g)</th>
               <th className="n">毛利率</th>
-              <th>库存</th>
-              <th>补货点</th>
-              <th>供货周期(天)</th>
+              <th className="n">库存</th>
+              <th>库存状态</th>
+              <th className="n">补货点</th>
+              <th className="n">供货周期(天)</th>
               <th>供应商</th>
               <th>状态</th>
-              <th>库存状态</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => {
-              const price = num(r, 'price');
-              const cost = num(r, 'cost');
-              const margin = price > 0 ? (price - cost) / price : null;
-              const st = stockState(r);
+            {groups.map((g) => {
+              const multi = g.rows.length > 1;
+              const open = multi && expanded.has(g.spu);
               return (
-                <tr key={r.id} className={draft[r.id] ? 'active' : ''}>
-                  <td>{cell(r, 'sku', 'w-md')}</td>
-                  <td>{cell(r, 'spu', 'w-lg')}</td>
-                  <td>{cell(r, 'variant', 'w-md')}</td>
-                  <td>{cell(r, 'category', 'w-md')}</td>
-                  <td><span className="muted">$ </span>{cell(r, 'price', '', 'number')}</td>
-                  <td><span className="muted">$ </span>{cell(r, 'cost', '', 'number')}</td>
-                  <td>{cell(r, 'weightG', '', 'number')}</td>
-                  <td className={'n ' + (margin != null && margin < 0.3 ? 'neg' : '')}>{margin == null ? '-' : pct(margin)}</td>
-                  <td>{cell(r, 'stock', '', 'number')}</td>
-                  <td>{cell(r, 'reorderPoint', '', 'number')}</td>
-                  <td>{cell(r, 'leadTimeDays', '', 'number')}</td>
-                  <td>{cell(r, 'supplier', 'w-md')}</td>
-                  <td>
-                    <select
-                      className={'edit w-md ' + (draft[r.id]?.status !== undefined ? 'dirty' : '')}
-                      value={val(r, 'status')}
-                      onChange={(e) => setVal(r, 'status', e.target.value)}
-                    >
-                      {STATUS.map((s) => (
-                        <option key={s.v} value={s.v}>{s.l}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>{st ? <span className={'tag ' + st.cls}>{st.text}</span> : <span className="muted">-</span>}</td>
-                </tr>
+                <Fragment key={g.spu}>
+                  {multi && (
+                    <tr className={'spu-row' + (open ? ' open' : '')} onClick={() => toggleSpu(g.spu)}>
+                      <td className="spu-toggle-cell"><span className={'spu-toggle' + (open ? ' open' : '')} aria-hidden /></td>
+                      <td className="spu-thumb-cell"><Thumb imageUrl={g.imageUrl} name={g.spu} /></td>
+                      <td className="spu-head" colSpan={3}>
+                        <div className="spu-head-main">
+                          <span className="spu-name">{g.spu}</span>
+                          <span className="pill">{g.rows.length} 个 SKU</span>
+                          {g.rows.some((r) => draft[r.id]) && <span className="pill amber">待保存</span>}
+                        </div>
+                        <div className="spu-sub" title={g.rows.map((r) => val(r, 'variant')).filter(Boolean).join(' / ')}>
+                          {variantPreview(g.rows.map((r) => val(r, 'variant')))}
+                          {g.supplier && <><span className="spu-sep">·</span>{g.supplier}</>}
+                        </div>
+                      </td>
+                      <td>{g.category}</td>
+                      <td className="n">{rangeMoney(g.priceMin, g.priceMax)}</td>
+                      <td className="n">{rangeMoney(g.costMin, g.costMax)}</td>
+                      <td className="n muted">—</td>
+                      <td className="n">{rangePct(g.marginMin, g.marginMax)}</td>
+                      <td className="n">{int(g.stock)}</td>
+                      <td>
+                        {g.out > 0 && <span className="tag red">缺货 {g.out}</span>}
+                        {g.low > 0 && <span className="tag amber" style={{ marginLeft: g.out > 0 ? 4 : 0 }}>需补货 {g.low}</span>}
+                        {g.out === 0 && g.low === 0 && <span className="tag green">正常</span>}
+                      </td>
+                      <td className="n muted">—</td>
+                      <td className="n muted">—</td>
+                      <td className="muted">—</td>
+                      <td>{g.status === 'mixed' ? <span className="muted">混合</span> : <span className={'tag ' + statusTone(g.status)}>{STATUS_LABEL[g.status] || g.status}</span>}</td>
+                    </tr>
+                  )}
+                  {(!multi || open) &&
+                    g.rows.map((r) => {
+                      const price = num(r, 'price');
+                      const cost = num(r, 'cost');
+                      const margin = price > 0 ? (price - cost) / price : null;
+                      const st = stockState(r);
+                      const thumbName = val(r, 'spu') + (val(r, 'variant') ? ' - ' + val(r, 'variant') : '');
+                      return (
+                        <tr key={r.id} className={[draft[r.id] ? 'active' : '', multi ? 'sku-row' : ''].filter(Boolean).join(' ')}>
+                          <td className="spu-toggle-cell">{multi && <span className="sku-indent" aria-hidden />}</td>
+                          <td><Thumb imageUrl={r.imageUrl} name={thumbName} /></td>
+                          <td>{cell(r, 'sku', 'w-md')}</td>
+                          <td>{cell(r, 'spu', 'w-lg')}</td>
+                          <td>{cell(r, 'variant', 'w-md')}</td>
+                          <td>{cell(r, 'category', 'w-md')}</td>
+                          <td className="n"><span className="muted">$ </span>{cell(r, 'price', '', 'number')}</td>
+                          <td className="n"><span className="muted">$ </span>{cell(r, 'cost', '', 'number')}</td>
+                          <td className="n">{cell(r, 'weightG', '', 'number')}</td>
+                          <td className={'n ' + (margin != null && margin < 0.3 ? 'neg' : '')}>{margin == null ? '-' : pct(margin)}</td>
+                          <td className="n">{cell(r, 'stock', '', 'number')}</td>
+                          <td>{st ? <span className={'tag ' + st.cls}>{st.text}</span> : <span className="muted">-</span>}</td>
+                          <td className="n">{cell(r, 'reorderPoint', '', 'number')}</td>
+                          <td className="n">{cell(r, 'leadTimeDays', '', 'number')}</td>
+                          <td>{cell(r, 'supplier', 'w-md')}</td>
+                          <td>
+                            <select
+                              className={'edit w-md ' + (draft[r.id]?.status !== undefined ? 'dirty' : '')}
+                              value={val(r, 'status')}
+                              onChange={(e) => setVal(r, 'status', e.target.value)}
+                            >
+                              {STATUS.map((s) => (
+                                <option key={s.v} value={s.v}>{s.l}</option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </Fragment>
               );
             })}
           </tbody>
@@ -330,7 +492,8 @@ export function ManageView() {
       {!loading && visible.length === 0 && <div className="empty">没有匹配的 SKU</div>}
 
       <div className="muted" style={{ fontSize: 12, marginTop: 10, lineHeight: 1.7 }}>
-        说明：成本修改后会重算产品分析里的历史毛利（按当前成本计算）；售价修改只影响产品资料，已生成订单的成交价不变。“产品名 - 变体”展示名由 SPU 和变体自动拼接。
+        说明：同一 SPU 下的多个 SKU 默认折叠为一行，点 SPU 行展开后可直接编辑每个变体（单 SKU 的 SPU 直接展示，无需展开）。库存 / 售价等列为聚合值，展开后按变体单独编辑。
+        成本修改后会重算产品分析里的历史毛利（按当前成本计算）；售价修改只影响产品资料，已生成订单的成交价不变。“产品名 - 变体”展示名由 SPU 和变体自动拼接。
         导入 CSV 按 sku 列匹配行，列可以只包含需要批量修改的字段（建议先「导出 CSV」拿模板）。数据保存在 web/data/catalog.json。
       </div>
     </div>

@@ -6,6 +6,7 @@ import { MiniTable } from '@/components/Sparkline';
 import { ShipCard } from '@/components/ShipCard';
 import { int, money } from '@/lib/format';
 import { useHotReload } from '@/lib/useHotReload';
+import { DataRefreshButton } from '@/components/DataRefreshButton';
 import type { OrderDetail, OrderItemPreview, OrderRow } from '@/lib/mock';
 
 function ItemThumb({ imageUrl, name }: { imageUrl: string; name: string }) {
@@ -89,6 +90,7 @@ export function OrdersView() {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const { version } = useHotReload();
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -107,7 +109,7 @@ export function OrdersView() {
     return () => {
       alive = false;
     };
-  }, [version]);
+  }, [version, tick]);
 
   useEffect(() => {
     if (!selected) {
@@ -123,7 +125,7 @@ export function OrdersView() {
     return () => {
       alive = false;
     };
-  }, [selected, version]);
+  }, [selected, version, tick]);
 
   const logisticsOptions = useMemo(() => {
     const set = new Set(rows.map((r) => r.logisticsStatus).filter(Boolean));
@@ -176,6 +178,7 @@ export function OrdersView() {
         <div className="bar">
           <input type="text" placeholder="筛选订单号 / Item / 邮箱 / 国家 / 渠道 / 物流状态..." value={query} onChange={(e) => setQuery(e.target.value)} />
           <button onClick={() => downloadCsv('orders.csv', toCsv(COLUMNS, visible))}>导出 CSV</button>
+          <DataRefreshButton onDone={() => setTick((t) => t + 1)} />
           <span className="muted">{loading ? '加载中...' : `${visible.length} 行`}</span>
         </div>
 

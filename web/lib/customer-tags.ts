@@ -1,15 +1,12 @@
-import path from 'node:path';
-import { readJson } from '@/lib/edm/storage';
+import { readAllTags } from '@/lib/db/docs';
 
-// 客户标签存储（web/data/tags.json）的只读访问。
-// 写入仍由 /api/tags 负责；这里只让受众计算与页面共用同一份标签，避免两边筛选结果不一致。
-
-const FILE = path.join(process.cwd(), 'data', 'tags.json');
+// 客户标签存储的只读访问（PostgreSQL 表 ops_customer_tags；file 后端回落 data/tags.json）。
+// 写入由 /api/tags 负责；这里让受众计算与页面共用同一份标签，避免两边筛选结果不一致。
 
 export type TagMap = Record<string, string[]>;
 
-export function loadTags(): TagMap {
-  return readJson<TagMap>(FILE, {});
+export async function loadTags(): Promise<TagMap> {
+  return readAllTags();
 }
 
 export function tagGetter(tags: TagMap): (id: string) => string[] {

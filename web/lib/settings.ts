@@ -1,7 +1,7 @@
-import fs from 'fs';
-import path from 'path';
+import { readSettingsDoc, writeSettingsDoc } from '@/lib/db/docs';
 
-// 接口配置存储在 web/data/settings.json(已 gitignore)。仅服务端使用,密钥不会原样返回前端。
+// 接口配置存储（PostgreSQL 单行文档表 ops_settings；file 后端回落到 data/settings.json）。
+// 仅服务端使用，密钥不会原样返回前端。
 // 优先级: 设置页保存的值 > 环境变量。
 
 export type Settings = {
@@ -10,8 +10,6 @@ export type Settings = {
 };
 
 export const SECRET_FIELDS = ['yuntu.apiSecret', 'shopify.adminToken'] as const;
-
-const FILE = path.join(process.cwd(), 'data', 'settings.json');
 
 function fromEnv(): Settings {
   const e = process.env;
@@ -27,12 +25,11 @@ function fromEnv(): Settings {
   };
 }
 
-export function loadSettings(): Settings {
+export async function loadSettings(): Promise<Settings> {
   const base = fromEnv();
   let saved: Partial<Settings> = {};
-  try {
-    saved = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  } catch {}
+  const doc = await readSettingsDoc();
+  if (doc && typeof doc === 'object') saved = doc as Partial<Settings>;
   const pick = <T extends Record<string, string>>(a: T, b?: Partial<T>): T => {
     const out = { ...a };
     for (const k of Object.keys(a)) {
@@ -44,9 +41,8 @@ export function loadSettings(): Settings {
   return { yuntu: pick(base.yuntu, saved.yuntu), shopify: pick(base.shopify, saved.shopify) };
 }
 
-export function saveSettings(s: Settings) {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(s, null, 2));
+export async function saveSettings(s: Settings): Promise<void> {
+  await writeSettingsDoc(s);
 }
 
 export function maskSecret(v: string) {
@@ -54,11 +50,11 @@ export function maskSecret(v: string) {
   return v.length <= 6 ? '••••••' : '••••••' + v.slice(-3);
 }
 
-export function yuntuReady(s = loadSettings()) {
+export function yuntuReady(s: Settings) {
   const y = s.yuntu;
   return !!(y.baseUrl && y.customerCode && y.apiSecret && y.channelCode);
 }
 
-export function shopifyReady(s = loadSettings()) {
+export function shopifyReady(s: Settings) {
   return !!(s.shopify.shop && s.shopify.adminToken);
 }

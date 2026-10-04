@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 /** 推送已冻结的本地模板版本；模板不是客户数据，因此不受 Mock 数据源限制 */
 export async function POST(req: NextRequest) {
   try {
-    const ctx = requireWrite(req, { customerData: false });
+    const ctx = await requireWrite(req, { customerData: false });
     const b = await readJsonBody(req);
     const operation = await runTemplateSync(ctx, {
       templateId: str(b.templateId),

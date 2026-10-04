@@ -10,7 +10,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
-    return NextResponse.json({ versions: listVersions(id) });
+    return NextResponse.json({ versions: await listVersions(id) });
   } catch (e) {
     return errorResponse(e);
   }
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const source = str(b.source);
     const allowed: VersionSource[] = ['manual', 'import', 'klaviyo'];
     return NextResponse.json(
-      saveVersion(id, {
+      await saveVersion(id, {
         html: b.html,
         note: str(b.note),
         expectedRevision: typeof b.expectedRevision === 'number' ? b.expectedRevision : undefined,

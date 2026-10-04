@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     requireOperator(req);
-    return NextResponse.json({ operations: listOperations(50) });
+    return NextResponse.json({ operations: await listOperations(50) });
   } catch (e) {
     return errorResponse(e);
   }

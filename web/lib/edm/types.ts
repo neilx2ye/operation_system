@@ -1,5 +1,6 @@
 // EDM 模板设计器的本地数据契约。
-// 本期不接入数据库：页面只依赖 lib/edm/service.ts，具体存储由 lib/edm/repositories/ 提供。
+// 存储后端已可插拔：页面只依赖 lib/edm/service.ts，具体存储由 lib/edm/repositories/ 提供
+// （postgres 默认；file / memory 供回滚与测试）。
 // 所有时间字段统一为 ISO 字符串，所有 id 由 lib/edm/ids.ts 生成并校验。
 
 export type Id = string;

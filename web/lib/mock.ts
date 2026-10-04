@@ -3,8 +3,13 @@
 // 同步写盘后（缓存文件 mtime 变化）按需重建内存数据，因此同步完成后无需重启服务即可看到真实数据。
 // 聚合逻辑与 Mock 时期保持一致，只替换顶部数据来源。
 
-import fs from 'node:fs';
-import path from 'node:path';
+import {
+  readCatalogOverrides,
+  readCatalogOverridesRevision,
+  readShopifyCache,
+  readShopifyCacheRevision,
+  replaceAllCatalogOverrides,
+} from '@/lib/db/docs';
 
 type CachedCustomer = Customer & { name?: string; phone?: string; tags?: string[] };
 type CachedOrder = Order & {
@@ -20,8 +25,6 @@ type ShopifyCache = {
   orders: CachedOrder[];
   abandons: Abandon[];
 };
-const SHOPIFY_CACHE_FILE = path.join(process.cwd(), 'data', 'shopify-cache.json');
-
 const DAY = 86_400_000;
 
 function rng(seed: number) {
@@ -159,17 +162,17 @@ const MOCK_PRODUCTS: Product[] = PRODUCT_DEFS.map((d, i) => ({
 
 // ---------- 数据来源（Shopify 缓存优先，文件变化时重建） ----------
 
-function loadShopifyCache(): ShopifyCache | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(SHOPIFY_CACHE_FILE, 'utf8'));
-    if (!Array.isArray(raw?.products) || !Array.isArray(raw?.customers) || !Array.isArray(raw?.orders) || !Array.isArray(raw?.abandons)) return null;
-    return raw as ShopifyCache;
-  } catch {
-    return null;
+async function loadShopifyCache(): Promise<{ cache: ShopifyCache | null; revision: string | null }> {
+  const doc = await readShopifyCache();
+  const raw = doc.data as Partial<ShopifyCache> | null;
+  if (!raw || !Array.isArray(raw.products) || !Array.isArray(raw.customers) || !Array.isArray(raw.orders) || !Array.isArray(raw.abandons)) {
+    return { cache: null, revision: doc.revision };
   }
+  return { cache: raw as ShopifyCache, revision: doc.revision };
 }
 
-let dataMtime = -1;
+let dataRevision: string | null | undefined = undefined;
+let dataReady = false;
 let shopifyCache: ShopifyCache | null = null;
 export let DATA_SOURCE: 'shopify' | 'mock' = 'mock';
 export let PRODUCTS: Product[] = MOCK_PRODUCTS;
@@ -179,20 +182,15 @@ let ORDERS: CachedOrder[] = [];
 let ABANDONS: Abandon[] = [];
 let CATALOG_DEFAULTS: Record<string, Required<CatalogPatch>> = {};
 
-function cacheMtime(): number {
-  try {
-    return fs.statSync(SHOPIFY_CACHE_FILE).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-/** 缓存文件变化（例如刚完成 Shopify 同步）时重建内存里的数据与派生聚合 */
-function ensureData() {
-  const m = cacheMtime();
-  if (m === dataMtime) return;
-  dataMtime = m;
-  rebuild();
+/** 数据源变化（例如刚完成 Shopify 同步）时重建内存里的数据与派生聚合。
+ *  先只探测修订号（轻量查询），只有真正变化时才读取整包缓存，避免每次请求都拉取大对象。 */
+async function ensureData() {
+  const revision = await readShopifyCacheRevision();
+  if (dataReady && revision === dataRevision) return;
+  dataRevision = revision;
+  const { cache } = await loadShopifyCache();
+  rebuild(cache);
+  dataReady = true;
 }
 
 // ---------- 产品目录（可编辑参数，持久化到 data/catalog.json，文件为准） ----------
@@ -200,10 +198,12 @@ function ensureData() {
 export const CATALOG_FIELDS = ['sku', 'spu', 'variant', 'category', 'price', 'cost', 'weightG', 'stock', 'reorderPoint', 'leadTimeDays', 'supplier', 'status'] as const;
 export type CatalogField = (typeof CATALOG_FIELDS)[number];
 export type CatalogPatch = Partial<Pick<Product, CatalogField>>;
-export type CatalogRow = Pick<Product, 'id' | 'title' | CatalogField>;
+export type CatalogRow = Pick<Product, 'id' | 'title' | CatalogField> & {
+  /** 商品主图（Shopify 同步所得；Mock 或旧缓存可能为空串）。 */
+  imageUrl: string;
+};
 
-const CATALOG_FILE = path.join(process.cwd(), 'data', 'catalog.json');
-let catalogMtime = -1;
+let catalogRevision: string | null | undefined = undefined;
 
 const pickFields = (p: Product): Required<CatalogPatch> => ({
   sku: p.sku,
@@ -254,13 +254,9 @@ function sanitize(raw: Record<string, unknown>): CatalogPatch {
   return out;
 }
 
-function readOverrides(): Record<string, CatalogPatch> {
-  try {
-    const j = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8'));
-    return j && typeof j === 'object' ? j : {};
-  } catch {
-    return {};
-  }
+async function readOverrides(): Promise<{ overrides: Record<string, CatalogPatch>; revision: string | null }> {
+  const { overrides, revision } = await readCatalogOverrides();
+  return { overrides: overrides as Record<string, CatalogPatch>, revision };
 }
 
 function applyPatch(p: Product, patch: CatalogPatch) {
@@ -268,34 +264,30 @@ function applyPatch(p: Product, patch: CatalogPatch) {
   p.title = p.variant ? p.spu + ' - ' + p.variant : p.spu;
 }
 
-/** 文件有变化时，把目录参数同步到内存中的 PRODUCTS（分析聚合用的成本/名称随之更新） */
-export function syncCatalog() {
-  let m = 0;
-  try {
-    m = fs.statSync(CATALOG_FILE).mtimeMs;
-  } catch {
-    m = 0;
-  }
-  if (m === catalogMtime) return;
-  catalogMtime = m;
-  const ov = readOverrides();
+/** 目录参数变化时同步到内存中的 PRODUCTS（分析聚合用的成本/名称随之更新）。
+ *  同样先探测修订号，只有变化时才读取覆盖明细。 */
+async function syncCatalog() {
+  const revision = await readCatalogOverridesRevision();
+  if (revision === catalogRevision) return;
+  catalogRevision = revision;
+  const { overrides } = await readOverrides();
   PRODUCTS.forEach((p) => {
     applyPatch(p, CATALOG_DEFAULTS[p.id]);
-    if (ov[p.id]) applyPatch(p, sanitize(ov[p.id] as Record<string, unknown>));
+    if (overrides[p.id]) applyPatch(p, sanitize(overrides[p.id] as Record<string, unknown>));
   });
 }
 
-export function catalogRows(): CatalogRow[] {
-  ensureData();
-  syncCatalog();
-  return PRODUCTS.map((p) => ({ id: p.id, title: p.title, ...pickFields(p) }));
+export async function catalogRows(): Promise<CatalogRow[]> {
+  await ensureData();
+  await syncCatalog();
+  return PRODUCTS.map((p) => ({ id: p.id, title: p.title, imageUrl: p.imageUrl ?? '', ...pickFields(p) }));
 }
 
 /** 批量更新：{ 产品id: { 字段: 值 } }。校验失败会抛错且不写文件。返回更新的 SKU 数。 */
-export function updateCatalog(patches: Record<string, Record<string, unknown>>): number {
-  ensureData();
-  syncCatalog();
-  const ov = readOverrides();
+export async function updateCatalog(patches: Record<string, Record<string, unknown>>): Promise<number> {
+  await ensureData();
+  await syncCatalog();
+  const { overrides: ov } = await readOverrides();
   let n = 0;
   for (const [id, raw] of Object.entries(patches)) {
     if (!pById[id] || !raw || typeof raw !== 'object') continue;
@@ -310,10 +302,9 @@ export function updateCatalog(patches: Record<string, Record<string, unknown>>):
     if (seen.has(s)) throw new Error('SKU 编码重复：' + s);
     seen.add(s);
   }
-  fs.mkdirSync(path.dirname(CATALOG_FILE), { recursive: true });
-  fs.writeFileSync(CATALOG_FILE, JSON.stringify(ov, null, 2));
-  catalogMtime = -1;
-  syncCatalog();
+  await replaceAllCatalogOverrides(ov as Record<string, Record<string, unknown>>);
+  catalogRevision = undefined;
+  await syncCatalog();
   return n;
 }
 
@@ -434,8 +425,7 @@ let pairCount: Record<string, number> = {};
 let prodCust: Record<string, number> = {};
 let AB: Record<string, Abandon[]> = {};
 
-function rebuild() {
-  const cache = loadShopifyCache();
+function rebuild(cache: ShopifyCache | null) {
   shopifyCache = cache;
   NOW = Date.now();
 
@@ -457,7 +447,7 @@ function rebuild() {
   }
 
   CATALOG_DEFAULTS = Object.fromEntries(PRODUCTS.map((p) => [p.id, pickFields(p)]));
-  catalogMtime = -1;
+  catalogRevision = undefined;
 
   pById = Object.fromEntries(PRODUCTS.map((p) => [p.id, p]));
   cById = Object.fromEntries(ALL_CUSTOMERS.map((c) => [c.id, c]));
@@ -545,8 +535,8 @@ function rebuild() {
 }
 
 /** 当前数据源概览：来源、同步时间、行数 */
-export function dataSourceInfo() {
-  ensureData();
+export async function dataSourceInfo() {
+  await ensureData();
   return {
     source: DATA_SOURCE,
     syncedAt: shopifyCache?.syncedAt ?? null,
@@ -690,8 +680,8 @@ function productRowR(p: Product, from: number, to: number): ProductRow {
   };
 }
 
-export function parseRange(from?: string | null, to?: string | null): Range | null {
-  ensureData();
+export async function parseRange(from?: string | null, to?: string | null): Promise<Range | null> {
+  await ensureData();
   if (!from && !to) return null;
   const f = from ? new Date(from + 'T00:00:00').getTime() : ORDERS[0]?.t ?? NOW;
   const t = to ? new Date(to + 'T23:59:59.999').getTime() : Date.now();
@@ -722,9 +712,9 @@ function customerRow(c: Customer): CustomerRow {
 
 // ---------- 关联分析（共同购买） ----------
 
-export function relations(productId?: string | null): RelationRow[] {
-  ensureData();
-  syncCatalog();
+export async function relations(productId?: string | null): Promise<RelationRow[]> {
+  await ensureData();
+  await syncCatalog();
   const N = CUSTOMERS.length;
   return Object.keys(pairCount)
     .map((key) => {
@@ -746,9 +736,9 @@ export function relations(productId?: string | null): RelationRow[] {
 
 // ---------- 详情 ----------
 
-export function productDetail(id: string, rg?: Range | null): ProductDetail | null {
-  ensureData();
-  syncCatalog();
+export async function productDetail(id: string, rg?: Range | null): Promise<ProductDetail | null> {
+  await ensureData();
+  await syncCatalog();
   const p = pById[id];
   if (!p) return null;
   const s = PS[id];
@@ -763,15 +753,15 @@ export function productDetail(id: string, rg?: Range | null): ProductDetail | nu
     }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 20);
-  const coProducts = relations(id)
+  const coProducts = (await relations(id))
     .slice(0, 8)
     .map((r) => ({ product: r.aId === id ? r.b : r.a, count: r.count, lift: r.lift }));
   return { ...(rg ? productRowR(p, rg.from, rg.to) : productRow(p)), weekly: s.weekly.map(r2), buyersList, coProducts };
 }
 
-export function customerDetail(id: string): CustomerDetail | null {
-  ensureData();
-  syncCatalog();
+export async function customerDetail(id: string): Promise<CustomerDetail | null> {
+  await ensureData();
+  await syncCatalog();
   const c = cById[id];
   if (!c) return null;
   const products = [...CS[id].products.entries()]
@@ -813,14 +803,14 @@ export function customerDetail(id: string): CustomerDetail | null {
   };
 }
 
-export function allProductRows(rg?: Range | null): ProductRow[] {
-  ensureData();
-  syncCatalog();
+export async function allProductRows(rg?: Range | null): Promise<ProductRow[]> {
+  await ensureData();
+  await syncCatalog();
   return PRODUCTS.map((p) => (rg ? productRowR(p, rg.from, rg.to) : productRow(p)));
 }
 
-export function allCustomerRows(): CustomerRow[] {
-  ensureData();
+export async function allCustomerRows(): Promise<CustomerRow[]> {
+  await ensureData();
   return ALL_CUSTOMERS.map(customerRow);
 }
 
@@ -893,9 +883,9 @@ function orderRow(o: Order): OrderRow {
   };
 }
 
-export function allOrderRows(): OrderRow[] {
-  ensureData();
-  syncCatalog();
+export async function allOrderRows(): Promise<OrderRow[]> {
+  await ensureData();
+  await syncCatalog();
   return ORDERS.map(orderRow).reverse();
 }
 
@@ -930,9 +920,9 @@ function shippingOf(c: Customer) {
   };
 }
 
-export function orderDetail(id: string): OrderDetail | null {
-  ensureData();
-  syncCatalog();
+export async function orderDetail(id: string): Promise<OrderDetail | null> {
+  await ensureData();
+  await syncCatalog();
   const o = ORDERS.find((x) => x.id === id);
   if (!o) return null;
   const lines = o.items.map((it) => ({

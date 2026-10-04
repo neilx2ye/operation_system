@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { DataTable, sortRows, type Column, type Sort } from '@/components/DataTable';
 import { int, money } from '@/lib/format';
 import { useHotReload } from '@/lib/useHotReload';
+import { DataRefreshButton } from '@/components/DataRefreshButton';
 import type { CustomerRow } from '@/lib/mock';
 import styles from './userManager.module.css';
 
@@ -148,6 +149,7 @@ function PickerButton({
 
 export function UserManager() {
   const { version } = useHotReload();
+  const [tick, setTick] = useState(0);
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<TagMap>({});
@@ -211,7 +213,7 @@ export function UserManager() {
     return () => {
       alive = false;
     };
-  }, [version, commitStore, commitTags]);
+  }, [version, tick, commitStore, commitTags]);
 
   // ---------- 派生数据 ----------
 
@@ -745,6 +747,7 @@ export function UserManager() {
         <section className={styles.main}>
           <div className={styles.toolbar}>
             <input type="text" value={query} placeholder="搜索邮箱 / 国家 / 渠道 / 分组 / 标签…" onChange={(e) => setQuery(e.target.value)} />
+            <DataRefreshButton onDone={() => setTick((t) => t + 1)} />
             <span className={styles.crumbs}>
               {loading ? '加载中…' : `${scopeName}${tagFilter ? ' · ' + (tagFilter === TAG_NONE ? '无标签' : '#' + tagFilter) : ''} · 共 ${int(sorted.length)} 人`}
               {hasFilter && (

@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 /** 从 Klaviyo 拉取模板时先建立 OPS 本地副本，不改动远端 */
 export async function POST(req: NextRequest) {
   try {
-    const { cfg, accountId } = requireRead(req);
+    const { cfg, accountId } = await requireRead(req);
     const b = await readJsonBody(req);
     const remoteId = str(b.remoteId);
     if (!remoteId) throw badRequest('缺少 remoteId');
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     assertHtmlEditable(remote.editorType, remoteId);
     if (!remote.html) throw badRequest('远端模板没有 HTML 内容，不能作为 CODE 模板导入');
 
-    const created = createTemplate({
+    const created = await createTemplate({
       name: str(b.name) || remote.name || `Klaviyo 模板 ${remoteId}`,
       html: remote.html,
       origin: 'klaviyo',

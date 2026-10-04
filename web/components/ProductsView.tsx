@@ -6,6 +6,7 @@ import { MiniTable, Sparkline } from '@/components/Sparkline';
 import { ProductInsights, enrich, type QuadrantKey } from '@/components/ProductInsights';
 import { int, money, pct } from '@/lib/format';
 import { useHotReload } from '@/lib/useHotReload';
+import { DataRefreshButton } from '@/components/DataRefreshButton';
 import type { ProductDetail, ProductRow } from '@/lib/mock';
 
 const COLUMNS: Column<ProductRow>[] = [
@@ -45,6 +46,7 @@ export function ProductsView() {
   const [quadrant, setQuadrant] = useState<QuadrantKey | null>(null);
   const [detail, setDetail] = useState<ProductDetail | null>(null);
   const { version } = useHotReload();
+  const [tick, setTick] = useState(0);
 
   const qs = from || to ? `?from=${from}&to=${to}` : '';
 
@@ -62,7 +64,7 @@ export function ProductsView() {
     return () => {
       alive = false;
     };
-  }, [qs, version]);
+  }, [qs, version, tick]);
 
   useEffect(() => {
     if (!selected) {
@@ -78,7 +80,7 @@ export function ProductsView() {
     return () => {
       alive = false;
     };
-  }, [selected, qs, version]);
+  }, [selected, qs, version, tick]);
 
   const quadOf = useMemo(() => new Map(enrich(rows).map((e) => [e.id, e.quadrant] as const)), [rows]);
   const visible = useMemo(() => {
@@ -115,6 +117,7 @@ export function ProductsView() {
             <button onClick={() => setPreset(0)}>全部</button>
           </span>
           <button onClick={() => downloadCsv('products.csv', toCsv(COLUMNS, visible))}>导出 CSV</button>
+          <DataRefreshButton onDone={() => setTick((t) => t + 1)} />
           <span className="muted">{loading ? '加载中...' : `${visible.length} 行`}</span>
         </div>
         <ProductInsights

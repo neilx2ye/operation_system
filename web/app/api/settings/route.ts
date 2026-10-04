@@ -14,9 +14,9 @@ const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
  * Klaviyo 卡片只展示非敏感绑定信息；私钥来自 KLAVIYO_PRIVATE_API_KEY 环境变量，
  * 不经由设置页录入，也永远不会回显到浏览器。
  */
-function view(req?: Request) {
-  const s = loadSettings();
-  const binding = getBinding();
+async function view(req?: Request) {
+  const s = await loadSettings();
+  const binding = await getBinding();
   const envWrites = writesEnabledByEnv();
   const access = req ? accessSummary(req) : null;
   return {
@@ -44,14 +44,14 @@ function view(req?: Request) {
 }
 
 export async function GET(req: Request) {
-  return NextResponse.json(view(req));
+  return NextResponse.json(await view(req));
 }
 
 // 密钥字段留空 = 保持原值
 export async function PUT(req: Request) {
   const b: any = await req.json().catch(() => null);
   if (!b) return NextResponse.json({ error: '请求格式错误' }, { status: 400 });
-  const cur = loadSettings();
+  const cur = await loadSettings();
   const next: Settings = {
     yuntu: {
       baseUrl: str(b.yuntu?.baseUrl),
@@ -86,10 +86,10 @@ export async function PUT(req: Request) {
     if ('writesEnabled' in k) patch.writesEnabled = k.writesEnabled === true;
   }
 
-  saveSettings(next);
-  if (Object.keys(patch).length) updateBinding(patch);
+  await saveSettings(next);
+  if (Object.keys(patch).length) await updateBinding(patch);
 
-  return NextResponse.json(view(req));
+  return NextResponse.json(await view(req));
 }
 
 // 测试连接：Shopify 直接调用；云途没有官方确认的无副作用接口，不做猜测
@@ -106,7 +106,7 @@ export async function POST(req: Request) {
     }
     try {
       const r = await testConnection();
-      updateBinding({
+      await updateBinding({
         lastCheckedAt: new Date().toISOString(),
         lastCheck: { ok: r.ok, detail: r.detail },
         ...(r.account ? { accountId: r.account.id, accountLabel: r.account.label } : {}),
@@ -114,13 +114,13 @@ export async function POST(req: Request) {
       return NextResponse.json(r);
     } catch (e: any) {
       const detail = (e?.message || String(e)).slice(0, 300);
-      updateBinding({ lastCheckedAt: new Date().toISOString(), lastCheck: { ok: false, detail } });
+      await updateBinding({ lastCheckedAt: new Date().toISOString(), lastCheck: { ok: false, detail } });
       return NextResponse.json({ ok: false, error: detail }, { status: 502 });
     }
   }
 
   if (b.target !== 'shopify') return NextResponse.json({ error: '不支持的测试目标' }, { status: 400 });
-  const cfg = shopifyConfig();
+  const cfg = await shopifyConfig();
   if (!cfg) return NextResponse.json({ error: '请先保存 Shopify 店铺域名和 Admin Token' }, { status: 400 });
   try {
     const r = await testShopify(cfg);

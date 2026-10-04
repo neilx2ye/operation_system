@@ -19,6 +19,7 @@ import { TAG_NONE } from '@/lib/customer-segmentation';
 import type { KlaviyoMarketingStatus } from '@/lib/edm/types';
 import { int, money } from '@/lib/format';
 import { useHotReload } from '@/lib/useHotReload';
+import { DataRefreshButton } from '@/components/DataRefreshButton';
 import type { CustomerDetail, CustomerRow } from '@/lib/mock';
 
 type TagMap = Record<string, string[]>;
@@ -140,6 +141,7 @@ export function CustomersView() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const { version } = useHotReload();
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -168,7 +170,7 @@ export function CustomersView() {
     return () => {
       alive = false;
     };
-  }, [version]);
+  }, [version, tick]);
 
   useEffect(() => {
     if (!selected) {
@@ -184,7 +186,7 @@ export function CustomersView() {
     return () => {
       alive = false;
     };
-  }, [selected, version]);
+  }, [selected, version, tick]);
 
   const applyTags = useCallback((ids: string[], add: string[], remove: string[]) => {
     setTags((prev) => {
@@ -403,6 +405,7 @@ export function CustomersView() {
         <div className="bar">
           <input type="text" placeholder="筛选邮箱 / 国家 / 渠道 / 分层 / 标签..." value={query} onChange={(e) => setQuery(e.target.value)} />
           <button onClick={() => downloadCsv('customers.csv', toCsv(columns, visible))}>导出 CSV</button>
+          <DataRefreshButton onDone={() => setTick((t) => t + 1)} />
           <span className="muted">{loading ? '加载中...' : `共 ${visible.length} 行`}</span>
         </div>
         {(statusLoading || statusError) && (

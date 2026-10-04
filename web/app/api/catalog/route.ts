@@ -4,8 +4,8 @@ import { catalogRows, updateCatalog } from '@/lib/mock';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export function GET() {
-  return NextResponse.json(catalogRows());
+export async function GET() {
+  return NextResponse.json(await catalogRows());
 }
 
 /** body: { patches: { [productId]: { price?, cost?, stock?, ... } } } */
@@ -15,8 +15,8 @@ export async function PUT(req: NextRequest) {
     if (!body || typeof body.patches !== 'object' || body.patches === null) {
       return NextResponse.json({ error: '缺少 patches' }, { status: 400 });
     }
-    const updated = updateCatalog(body.patches);
-    return NextResponse.json({ updated, rows: catalogRows() });
+    const updated = await updateCatalog(body.patches);
+    return NextResponse.json({ updated, rows: await catalogRows() });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }

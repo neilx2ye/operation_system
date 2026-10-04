@@ -1091,3 +1091,228 @@ a.btn:hover {
 .set-actions {
   margin-top: 14px;
 }
+/* 数据页面的「更新数据」按钮（增量同步） */
+.data-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.data-refresh-msg {
+  font-size: 12px;
+  max-width: 420px;
+}
+
+/* ---------- 产品管理：SPU 折叠 / SKU 缩略图 ---------- */
+.manage-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.manage-table th,
+.manage-table td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.manage-table thead th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: #f8fafc;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.manage-table tbody tr:hover {
+  background: #f8fafc;
+  cursor: default;
+}
+
+/* 缩略图 */
+.catalog-thumb {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.catalog-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 展开按钮（CSS 三角，避免字体缺字） */
+.spu-toggle-cell {
+  width: 28px;
+  padding-left: 12px !important;
+  padding-right: 0 !important;
+  text-align: center;
+}
+
+.spu-toggle {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e2e8f0;
+  color: #475569;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.spu-toggle::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+  transform: translateX(1px);
+  transition: transform 0.15s ease;
+}
+
+tr.spu-row:hover .spu-toggle {
+  background: #cbd5e1;
+}
+
+.spu-toggle.open {
+  background: var(--accent);
+  color: #fff;
+}
+
+.spu-toggle.open::before {
+  transform: rotate(90deg);
+}
+
+/* SPU 汇总行 */
+.manage-table tr.spu-row {
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.manage-table tr.spu-row > td {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.manage-table tr.spu-row:hover {
+  background: #f1f5f9;
+}
+
+.manage-table tr.spu-row.open {
+  background: #eff6ff;
+}
+
+.spu-thumb-cell {
+  width: 48px;
+}
+
+.spu-head {
+  white-space: normal;
+  min-width: 250px;
+}
+
+.spu-head-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.spu-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.spu-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 430px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spu-sep {
+  margin: 0 6px;
+  color: #cbd5e1;
+}
+
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  background: #e2e8f0;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.pill.amber {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+/* 子 SKU 行 */
+.manage-table tr.sku-row {
+  background: #fff;
+}
+
+.manage-table tr.sku-row:hover {
+  background: #f8fafc;
+}
+
+.manage-table tr.sku-row > td {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.manage-table tr.sku-row.active > td,
+.manage-table tr.active > td {
+  background: #fefce8;
+}
+
+.sku-indent {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  vertical-align: middle;
+  border-left: 2px solid #cbd5e1;
+  border-bottom: 2px solid #cbd5e1;
+  border-bottom-left-radius: 6px;
+}
+
+.manage-table .n {
+  font-variant-numeric: tabular-nums;
+}
+
+.manage-table td.n .edit {
+  text-align: right;
+}
+
+/* 产品管理：收紧编辑控件宽度，让列更紧凑 */
+.manage-table .edit.w-md {
+  width: 112px;
+}
+
+.manage-table .edit.w-lg {
+  width: 172px;
+}

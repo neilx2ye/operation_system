@@ -12,7 +12,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   try {
     requireOperator(req);
     const { id } = await ctx.params;
-    return NextResponse.json({ operation: getOperation(id) });
+    return NextResponse.json({ operation: await getOperation(id) });
   } catch (e) {
     return errorResponse(e);
   }

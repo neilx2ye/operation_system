@@ -5,8 +5,8 @@ export type ShopifyConfig = { shop: string; token: string; version: string };
 
 import { loadSettings, shopifyReady } from '@/lib/settings';
 
-export function shopifyConfig(): ShopifyConfig | null {
-  const s = loadSettings();
+export async function shopifyConfig(): Promise<ShopifyConfig | null> {
+  const s = await loadSettings();
   if (!shopifyReady(s)) return null;
   return { shop: s.shopify.shop.replace(/^https?:\/\//, '').replace(/\/+$/, ''), token: s.shopify.adminToken, version: s.shopify.apiVersion || '2025-07' };
 }

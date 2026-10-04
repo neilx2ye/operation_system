@@ -1,34 +1,22 @@
 import { NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { readGroups, writeGroups, type GroupStore } from '@/lib/db/docs';
 
 export const dynamic = 'force-dynamic';
 
-// 客户分组存储：落盘到 web/data/groups.json。
+// 客户分组存储：PostgreSQL 表 ops_customer_groups / ops_customer_group_members
+//（file 后端回落 data/groups.json）。
 // groups 是分组定义，members 是 { [customerId]: groupId[] }（一个客户可属于多个分组）。
-// 后续接 Postgres/Supabase 时，只需替换 load/save。
-const FILE = path.join(process.cwd(), 'data', 'groups.json');
-
-type Group = { id: string; name: string; color: string };
-type Store = { groups: Group[]; members: Record<string, string[]> };
+type Store = GroupStore;
 
 const COLORS = ['#3b82f6', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 const MAX_NAME = 30;
 
 async function load(): Promise<Store> {
-  try {
-    const s = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Store>;
-    return { groups: Array.isArray(s.groups) ? s.groups : [], members: s.members && typeof s.members === 'object' ? s.members : {} };
-  } catch {
-    return { groups: [], members: {} };
-  }
+  return readGroups();
 }
 
 async function save(store: Store) {
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  const tmp = FILE + '.tmp';
-  await fs.writeFile(tmp, JSON.stringify(store, null, 2), 'utf8');
-  await fs.rename(tmp, FILE);
+  await writeGroups(store);
 }
 
 // 串行化写入，避免并发请求互相覆盖

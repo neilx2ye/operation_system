@@ -3,6 +3,6 @@ import { allCustomerRows } from '@/lib/mock';
 
 export const dynamic = 'force-dynamic';
 
-export function GET() {
-  return NextResponse.json(allCustomerRows());
+export async function GET() {
+  return NextResponse.json(await allCustomerRows());
 }

@@ -88,3 +88,16 @@ export function subscribeHotReload(listener: Listener): () => void {
     if (h.listeners.size === 0) stopWatching(h);
   };
 }
+/**
+ * 主动广播一次数据层变更。
+ *
+ * 数据搬进数据库后，写入不再产生文件事件，文件监听无法感知，
+ * 因此在数据写入完成后显式调用本函数，让已打开的页面自动重新取数。
+ * 生产环境为 no-op（与 subscribeHotReload 一致）；开发环境经 /api/hot-reload 推送给浏览器。
+ */
+export function broadcastReload(file = 'db'): void {
+  if (!hotReloadEnabled()) return;
+  const h = hub();
+  h.pending = file;
+  flush(h);
+}

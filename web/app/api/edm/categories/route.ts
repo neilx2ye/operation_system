@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    return NextResponse.json({ categories: listCategories() });
+    return NextResponse.json({ categories: await listCategories() });
   } catch (e) {
     return errorResponse(e);
   }
@@ -15,7 +15,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const b = await readJsonBody(req);
-    return NextResponse.json({ category: upsertCategory(str(b.name), str(b.id) || undefined) });
+    return NextResponse.json({ category: await upsertCategory(str(b.name), str(b.id) || undefined) });
   } catch (e) {
     return errorResponse(e);
   }

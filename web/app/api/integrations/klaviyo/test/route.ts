@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
     const result = await testConnection();
     const at = new Date().toISOString();
-    updateBinding({
+    await updateBinding({
       lastCheckedAt: at,
       lastCheck: { ok: result.ok, detail: result.detail },
       ...(result.account ? { accountId: result.account.id, accountLabel: result.account.label } : {}),

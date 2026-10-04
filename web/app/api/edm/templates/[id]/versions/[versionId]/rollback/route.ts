@@ -10,7 +10,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { id, versionId } = await ctx.params;
     const b = await readJsonBody(req);
     const expected = typeof b.expectedRevision === 'number' ? b.expectedRevision : undefined;
-    return NextResponse.json(rollbackVersion(id, versionId, expected), { status: 201 });
+    return NextResponse.json(await rollbackVersion(id, versionId, expected), { status: 201 });
   } catch (e) {
     return errorResponse(e);
   }

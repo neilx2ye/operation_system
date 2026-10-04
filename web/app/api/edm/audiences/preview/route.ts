@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const b = await readJsonBody(req);
-    return NextResponse.json({ preview: publicPreview(computeAudience(parseAudienceRequest(b))) });
+    return NextResponse.json({ preview: publicPreview(await computeAudience(parseAudienceRequest(b))) });
   } catch (e) {
     return errorResponse(e);
   }

@@ -1,15 +1,10 @@
 // Shopify 全量同步:用 Bulk Operations 拉取商品/订单,分页拉取弃购,
-// 转换成 mock.ts 使用的数据结构,写入 data/shopify-cache.json(mock.ts 检测到该文件后自动切换为真实数据)。
+// 转换成 mock.ts 使用的数据结构,写入数据库 shopify_cache 表(mock.ts 检测到缓存后自动切换为真实数据)。
 // 需要 Admin API scopes: read_products, read_inventory, read_orders, read_all_orders, read_customers
 
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { shopifyConfig, type ShopifyConfig } from '@/lib/shopifyFulfill';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
-const CACHE_FILE = path.join(DATA_DIR, 'shopify-cache.json');
-const STATUS_FILE = path.join(DATA_DIR, 'shopify-sync-status.json');
+import { readShopifyCache, readSyncStatusDoc, writeShopifyCache, writeSyncStatusDoc } from '@/lib/db/docs';
 const MAX_ABANDON_PAGES = 40;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -25,6 +20,8 @@ const sha = (s: string) => crypto.createHash('sha1').update(s).digest('hex').sli
 
 export type SyncStatus = {
   state: 'idle' | 'running' | 'done' | 'error';
+  /** full=全量同步；incremental=只拉取自上次以来的变更 */
+  mode?: 'full' | 'incremental';
   step: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -33,18 +30,21 @@ export type SyncStatus = {
   warnings: string[];
 };
 
-const IDLE: SyncStatus = { state: 'idle', step: '', startedAt: null, finishedAt: null, error: null, counts: null, warnings: [] };
+const IDLE: SyncStatus = { state: 'idle', mode: 'full', step: '', startedAt: null, finishedAt: null, error: null, counts: null, warnings: [] };
 
-function writeStatus(s: SyncStatus) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STATUS_FILE, JSON.stringify(s));
+/** 增量游标回退的安全余量：避免 bulk 期间写入的变更被漏掉（重复拉取是幂等的） */
+const CURSOR_SAFETY_MS = 5 * 60_000;
+
+// 状态写入串行化，保证多次 step 的落库顺序与调用顺序一致
+let statusWriteQueue: Promise<unknown> = Promise.resolve();
+function writeStatus(s: SyncStatus): void {
+  const snap = structuredClone(s);
+  statusWriteQueue = statusWriteQueue.then(() => writeSyncStatusDoc(snap)).catch(() => undefined);
 }
 
-export function readStatus(): SyncStatus {
-  let s: SyncStatus = IDLE;
-  try {
-    s = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
-  } catch {}
+export async function readStatus(): Promise<SyncStatus> {
+  const stored = (await readSyncStatusDoc()) as SyncStatus | null;
+  const s: SyncStatus = stored && typeof stored === 'object' ? { ...IDLE, ...stored } : IDLE;
   if (s.state === 'running' && !(globalThis as any).__opsSyncRunning) {
     return { ...s, state: 'error', error: '同步进程已中断(服务重启?),请重新触发' };
   }
@@ -112,17 +112,19 @@ async function runBulk(cfg: ShopifyConfig, inner: string, label: string, setStep
   }
 }
 
-const PRODUCT_Q = `{ productVariants { edges { node {
-  id sku title displayName price inventoryQuantity
+const PRODUCT_NODE = `id sku title displayName price inventoryQuantity
   selectedOptions { name value }
   product { id title productType status featuredMedia { preview { image { url } } } }
-  inventoryItem { unitCost { amount } measurement { weight { value unit } } }
-} } } }`;
+  inventoryItem { unitCost { amount } measurement { weight { value unit } } }`;
+
+const PRODUCT_Q = `{ productVariants { edges { node { ${PRODUCT_NODE} } } } }`;
+
+/** 只取 updated_at 晚于 since 的商品变体（since 为不带毫秒的 ISO，如 2026-10-03T12:00:00Z） */
+const productQSince = (since: string) => `{ productVariants(query: "updated_at:>'${since}'") { edges { node { ${PRODUCT_NODE} } } } }`;
 
 const VISIT = `source sourceType referrerUrl landingPage utmParameters { source medium }`;
 
-const ORDER_Q = `{ orders { edges { node {
-  id name createdAt cancelledAt test email phone displayFulfillmentStatus
+const ORDER_NODE = `id name createdAt cancelledAt test email phone displayFulfillmentStatus
   customer { id email firstName lastName tags defaultAddress { countryCodeV2 } }
   shippingAddress { name phone address1 address2 city provinceCode zip countryCodeV2 }
   refunds { createdAt }
@@ -133,8 +135,12 @@ const ORDER_Q = `{ orders { edges { node {
     image { url }
     variant { id }
     discountedUnitPriceSet { shopMoney { amount } }
-  } } }
-} } } }`;
+  } } }`;
+
+const ORDER_Q = `{ orders { edges { node { ${ORDER_NODE} } } } }`;
+
+/** 只取 updated_at 晚于 since 的订单 */
+const orderQSince = (since: string) => `{ orders(query: "updated_at:>'${since}'") { edges { node { ${ORDER_NODE} } } } }`;
 
 const ABANDON_Q = `query($after: String) { abandonedCheckouts(first: 25, after: $after) {
   pageInfo { hasNextPage endCursor }
@@ -360,8 +366,41 @@ async function fetchAbandons(cfg: ShopifyConfig, customers: Map<string, any>, se
 
 // ---------- 入口 ----------
 
+/** 读取当前缓存（增量同步的基线）。 */
+async function readCachePayload(): Promise<any | null> {
+  const doc = await readShopifyCache();
+  const raw = doc.data as any;
+  if (!raw || !Array.isArray(raw.products) || !Array.isArray(raw.orders) || !Array.isArray(raw.customers)) return null;
+  return raw;
+}
+
+/** 按 id 合并：新数据覆盖同 id 的旧记录，未出现的旧记录保持不变。 */
+function upsertById<T>(current: T[], incoming: T[], keyOf: (t: T) => string, merge?: (old: T, inc: T) => T): T[] {
+  const map = new Map<string, T>();
+  for (const x of current) map.set(keyOf(x), x);
+  for (const y of incoming) {
+    const k = keyOf(y);
+    const prev = map.get(k);
+    map.set(k, prev && merge ? merge(prev, y) : y);
+  }
+  return [...map.values()];
+}
+
+/** 客户合并：保留原有的获客渠道(source)，只更新新订单里更可信的字段。 */
+function mergeCustomer(old: any, inc: any): any {
+  return {
+    ...old,
+    email: inc.email || old.email,
+    country: inc.country && inc.country !== 'N/A' ? inc.country : old.country,
+    name: inc.name || old.name,
+    phone: inc.phone || old.phone,
+    tags: Array.isArray(inc.tags) ? inc.tags : old.tags,
+  };
+}
+
 async function run(cfg: ShopifyConfig) {
-  const st: SyncStatus = { ...IDLE, state: 'running', startedAt: new Date().toISOString(), warnings: [] };
+  const startedAtMs = Date.now();
+  const st: SyncStatus = { ...IDLE, mode: 'full', state: 'running', startedAt: new Date().toISOString(), warnings: [] };
   const step = (s: string) => {
     st.step = s;
     writeStatus(st);
@@ -388,16 +427,14 @@ async function run(cfg: ShopifyConfig) {
     step('写入缓存…');
     const payload = {
       syncedAt: new Date().toISOString(),
+      syncCursor: new Date(startedAtMs).toISOString(),
       shop: cfg.shop,
       products,
       customers: [...customers.values()],
       orders,
       abandons,
     };
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = CACHE_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(payload));
-    fs.renameSync(tmp, CACHE_FILE);
+    await writeShopifyCache(payload, payload.syncedAt);
 
     st.state = 'done';
     st.step = '完成';
@@ -412,12 +449,86 @@ async function run(cfg: ShopifyConfig) {
   }
 }
 
-export function startSync(): { started: boolean; message: string } {
+/**
+ * 增量同步：只拉取自上次基线以来 updated_at 变化的商品与订单，按 id 合并进现有缓存。
+ * 商品/订单/客户可增量；弃购(checkout)没有可靠的 updated_at 过滤，保留原值，由全量同步刷新。
+ * 没有基线缓存时自动退化为全量同步。
+ */
+async function runIncremental(cfg: ShopifyConfig): Promise<void> {
+  const cache = await readCachePayload();
+  if (!cache) {
+    await run(cfg);
+    return;
+  }
+
+  const startedAtMs = Date.now();
+  const st: SyncStatus = { ...IDLE, mode: 'incremental', state: 'running', startedAt: new Date().toISOString(), warnings: [] };
+  const step = (s: string) => {
+    st.step = s;
+    writeStatus(st);
+  };
+  try {
+    const cursorIso = typeof cache.syncCursor === 'string' ? cache.syncCursor : cache.syncedAt;
+    const cursorMs = Date.parse(cursorIso);
+    const sinceMs = Number.isFinite(cursorMs) ? cursorMs - CURSOR_SAFETY_MS : startedAtMs - 24 * 3600_000;
+    const since = new Date(sinceMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+    step(`拉取更新的商品(自 ${since})…`);
+    const changedProducts = buildProducts(await runBulk(cfg, productQSince(since), '商品(增量)', step));
+
+    step('拉取更新的订单…');
+    const { orders: changedOrders, customers: changedCustomerMap } = buildOrders(
+      await runBulk(cfg, orderQSince(since), '订单(增量)', step),
+      changedProducts,
+    );
+    const changedCustomers = [...changedCustomerMap.values()];
+
+    const products = upsertById<any>(cache.products, changedProducts, (p) => p.id);
+    const orders = upsertById<any>(cache.orders, changedOrders, (o) => o.id).sort((a, b) => a.t - b.t);
+    const customers = upsertById<any>(cache.customers, changedCustomers, (c) => c.id, mergeCustomer);
+
+    step('写入缓存…');
+    const payload = {
+      ...cache,
+      syncedAt: new Date().toISOString(),
+      // 游标回退安全余量，宁可下次多拉一点，也不漏掉变更
+      syncCursor: new Date(startedAtMs - CURSOR_SAFETY_MS).toISOString(),
+      shop: cfg.shop,
+      products,
+      orders,
+      customers,
+      abandons: Array.isArray(cache.abandons) ? cache.abandons : [],
+    };
+    await writeShopifyCache(payload, payload.syncedAt);
+
+    st.state = 'done';
+    st.step = '完成';
+    st.counts = {
+      changedProducts: changedProducts.length,
+      changedOrders: changedOrders.length,
+      changedCustomers: changedCustomers.length,
+      products: products.length,
+      orders: orders.length,
+      customers: customers.length,
+      abandons: payload.abandons.length,
+    };
+  } catch (e: any) {
+    st.state = 'error';
+    st.error = e?.message || String(e);
+  } finally {
+    st.finishedAt = new Date().toISOString();
+    writeStatus(st);
+    (globalThis as any).__opsSyncRunning = false;
+  }
+}
+
+export async function startSync(mode: 'full' | 'incremental' = 'full'): Promise<{ started: boolean; message: string }> {
   const g = globalThis as any;
   if (g.__opsSyncRunning) return { started: false, message: '同步正在进行中' };
-  const cfg = shopifyConfig();
+  const cfg = await shopifyConfig();
   if (!cfg) return { started: false, message: '未配置 Shopify 店铺域名 / Admin Token' };
   g.__opsSyncRunning = true;
-  void run(cfg);
-  return { started: true, message: '已开始同步' };
+  if (mode === 'incremental') void runIncremental(cfg);
+  else void run(cfg);
+  return { started: true, message: mode === 'incremental' ? '已开始增量更新' : '已开始同步' };
 }

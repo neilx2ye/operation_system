@@ -16,12 +16,12 @@ const MAX_RETURNED = 500;
  */
 export async function POST(req: NextRequest) {
   try {
-    const { cfg, accountId } = requireRead(req);
+    const { cfg, accountId } = await requireRead(req);
     const b = await readJsonBody(req);
     const audienceId = str(b.audienceId);
     if (!audienceId) throw badRequest('缺少 audienceId');
 
-    const { audience, candidates } = resolveCandidates(audienceId);
+    const { audience, candidates } = await resolveCandidates(audienceId);
     if (audience.dataSource === 'mock') {
       throw badRequest('当前受众来自演示数据(Mock)，不能与真实 Klaviyo 账号做匹配');
     }
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    cacheIdentities(entries);
+    await cacheIdentities(entries);
     return NextResponse.json({
       audienceId: audience.id,
       candidateHash: candidateHashOf(audience.sourceRevision, candidates),

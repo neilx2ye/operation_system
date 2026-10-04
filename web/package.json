@@ -8,7 +8,8 @@
     "start": "next start",
     "smoke": "node smoke-test.mjs",
     "test:edm": "node edm-test.mjs",
-    "test:hot-reload": "node hot-reload-test.mjs"
+    "test:hot-reload": "node hot-reload-test.mjs",
+    "db:migrate": "node scripts/migrate-data-to-db.mjs"
   },
   "dependencies": {
     "@codemirror/lang-html": "^6.4.12",
@@ -17,11 +18,13 @@
     "diff": "^8.0.4",
     "js-beautify": "^1.15.4",
     "next": "16.3.8",
+    "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.6.0"

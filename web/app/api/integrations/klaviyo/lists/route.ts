@@ -8,9 +8,9 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const { cfg } = requireRead(req);
+    const { cfg } = await requireRead(req);
     const lists = await fetchLists(cfg);
-    cacheLists(lists);
+    await cacheLists(lists);
     return NextResponse.json({ lists });
   } catch (e) {
     return errorResponse(e);

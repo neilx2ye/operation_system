@@ -8,8 +8,8 @@ import { orderWeight, unitKg, type ManualOrder } from '@/lib/shipTypes';
 
 export type YuntuConfig = { baseUrl: string; customerCode: string; apiSecret: string; channelCode: string; unitWeightKg: number };
 
-export function yuntuConfig(): YuntuConfig | null {
-  const s = loadSettings();
+export async function yuntuConfig(): Promise<YuntuConfig | null> {
+  const s = await loadSettings();
   if (!yuntuReady(s)) return null;
   const y = s.yuntu;
   return { baseUrl: y.baseUrl.replace(/\/+$/, ''), customerCode: y.customerCode, apiSecret: y.apiSecret, channelCode: y.channelCode, unitWeightKg: Number(y.unitWeightKg) || 0.3 };

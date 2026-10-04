@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
-    return NextResponse.json(listTemplates({ q: sp.get('q') ?? undefined, categoryId: sp.get('categoryId') ?? undefined }));
+    return NextResponse.json(await listTemplates({ q: sp.get('q') ?? undefined, categoryId: sp.get('categoryId') ?? undefined }));
   } catch (e) {
     return errorResponse(e);
   }
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const b = await readJsonBody(req);
     const origin = str(b.origin);
     return NextResponse.json(
-      createTemplate({
+      await createTemplate({
         name: str(b.name),
         categoryId: str(b.categoryId) || null,
         storeKey: str(b.storeKey),

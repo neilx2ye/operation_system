@@ -57,6 +57,16 @@ type TestResult = { ok: boolean; name?: string; domain?: string; missingScopes?:
 type KlaviyoTestResult =
   | { ok: true; account: { id: string; label: string } | null; accounts: number; detail: string; readable: string[]; unverified: string[] }
   | { ok: false; error: string; authFailed: boolean };
+type ShopifySyncStatus = {
+  state: 'idle' | 'running' | 'done' | 'error';
+  step: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  counts: Record<string, number> | null;
+  warnings: string[];
+};
+
 type KlaviyoTestResponse = {
   ok?: boolean;
   account?: { id: string; label: string } | null;
@@ -93,7 +103,10 @@ export function SettingsView() {
   const [test, setTest] = useState<TestResult | null>(null);
   const [kTest, setKTest] = useState<KlaviyoTestResult | null>(null);
   const [hl, setHl] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [sync, setSync] = useState<ShopifySyncStatus | null>(null);
   const hlDone = useRef(false);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { version } = useHotReload();
 
   function apply(v: View) {
@@ -121,6 +134,13 @@ export function SettingsView() {
       .then((r) => r.json())
       .then(apply);
   }, [version]);
+
+  useEffect(() => {
+    loadSync();
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, []);
 
   // 深链 ?integration=klaviyo 或 #klaviyo:滚动到卡片并高亮;只读 window.location,不写入任何持久状态
   useEffect(() => {
@@ -176,6 +196,54 @@ export function SettingsView() {
       setNotice({ ok: false, text: e.message || '网络错误' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function loadSync(): Promise<ShopifySyncStatus | null> {
+    try {
+      const r = await fetch('/api/shopify/sync');
+      if (!r.ok) return null;
+      const d: ShopifySyncStatus = await r.json();
+      setSync(d);
+      return d;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 轮询同步状态；完成后提示结果。数据写入数据库会自动广播，其它页面随之刷新。 */
+  function pollSync() {
+    if (pollRef.current) clearTimeout(pollRef.current);
+    pollRef.current = setTimeout(async () => {
+      const d = await loadSync();
+      if (d && d.state === 'running') {
+        pollSync();
+        return;
+      }
+      setSyncing(false);
+      if (!d) return;
+      if (d.state === 'done') setNotice({ ok: true, text: 'Shopify 数据同步完成，页面已自动刷新' });
+      else if (d.state === 'error') setNotice({ ok: false, text: '同步失败：' + (d.error || '未知错误') });
+    }, 2500);
+  }
+
+  async function startShopifySync() {
+    setNotice(null);
+    setSyncing(true);
+    try {
+      const r = await fetch('/api/shopify/sync', { method: 'POST' });
+      const d = await r.json().catch(() => null);
+      if (d?.status) setSync(d.status as ShopifySyncStatus);
+      // 409 表示已在运行，继续轮询即可；其他非 2xx 直接提示
+      if (!r.ok && r.status !== 409) {
+        setNotice({ ok: false, text: d?.message || d?.error || '无法开始同步(HTTP ' + r.status + ')' });
+        setSyncing(false);
+        return;
+      }
+      pollSync();
+    } catch (e: any) {
+      setNotice({ ok: false, text: e.message || '网络错误' });
+      setSyncing(false);
     }
   }
 
@@ -238,7 +306,7 @@ export function SettingsView() {
   return (
     <div className="content page-wide set-page">
       <h2 className="set-title">设置</h2>
-      <div className="muted set-sub">接口配置保存在服务端(web/data/settings.json,已被 git 忽略),密钥不会回显到浏览器。设置页的值优先于环境变量。</div>
+      <div className="muted set-sub">接口配置保存在服务端数据库(ops_settings 表),密钥不会回显到浏览器。设置页的值优先于环境变量。</div>
 
       {notice && <div className={'notice ' + (notice.ok ? 'ok' : 'err')}>{notice.text}</div>}
 
@@ -268,8 +336,25 @@ export function SettingsView() {
             <button disabled={testing || !view.ready.shopify} onClick={testShopify}>
               {testing ? '测试中...' : '测试连接'}
             </button>
-            <span className="muted">先保存再测试</span>
+            <button disabled={syncing || !view.ready.shopify} onClick={startShopifySync}>
+              {syncing ? '同步中...' : '同步 Shopify 数据'}
+            </button>
+            <span className="muted">先保存再测试 / 同步</span>
           </div>
+          {sync && sync.state !== 'idle' && (
+            <div className={'notice ' + (sync.state === 'error' ? 'err' : sync.state === 'done' ? 'ok' : '')}>
+              {sync.state === 'running' && ('同步中：' + (sync.step || '准备中...'))}
+              {sync.state === 'done' && '同步完成'}
+              {sync.state === 'error' && ('同步失败：' + (sync.error || '未知错误'))}
+              {sync.counts && (
+                <div>
+                  商品 {sync.counts.products ?? 0} · 客户 {sync.counts.customers ?? 0} · 订单 {sync.counts.orders ?? 0} · 弃购 {sync.counts.abandons ?? 0}
+                </div>
+              )}
+              {sync.warnings && sync.warnings.length > 0 && <div>提示：{sync.warnings.join('；')}</div>}
+              {sync.finishedAt && <div className="muted">完成于 {sync.finishedAt.slice(0, 16).replace('T', ' ')}</div>}
+            </div>
+          )}
           {test && (
             <div className={'notice ' + (test.ok && !test.missingScopes?.length ? 'ok' : 'err')}>
               {test.ok ? (

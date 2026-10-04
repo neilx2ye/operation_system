@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 /** 向已确认的目标名单增加符合本期订阅规则的成员（只增加，不删除） */
 export async function POST(req: NextRequest) {
   try {
-    const ctx = requireWrite(req, { customerData: true });
+    const ctx = await requireWrite(req, { customerData: true });
     const b = await readJsonBody(req);
     const listId = str(b.listId);
     if (!listId) throw badRequest('缺少 listId');

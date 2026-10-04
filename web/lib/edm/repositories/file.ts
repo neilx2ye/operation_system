@@ -42,8 +42,9 @@ import type {
   TemplateRepository,
 } from './types';
 
-// 文件存储实现：一个实体一个 JSON 文件，素材原图另存 <id>.bin。
+// 文件存储实现（回滚/离线用）：一个实体一个 JSON 文件，素材原图另存 <id>.bin。
 // 所有 id 在拼路径前再校验一次；损坏文件按不存在处理，读取不抛出。
+// 方法保持同步 fs 调用，但对外统一返回 Promise，与 postgres/memory 实现形态一致。
 
 type CategoryIndex = {
   schemaVersion: number;
@@ -99,22 +100,29 @@ function mutateCategories(mutate: (list: TemplateCategory[]) => TemplateCategory
 
 function templateRepository(): TemplateRepository {
   return {
-    listTemplates() {
+    async listTemplates() {
       return listRecords('templates', isTemplateRecord).sort(compareUpdatedDesc);
     },
-    getTemplate(id) {
+    async getTemplate(id) {
       return getRecord('templates', id, isTemplateRecord);
     },
-    putTemplate(t) {
+    async putTemplate(t) {
       assertWritable(t, t?.id);
       writeJsonAtomic(fileOf('templates', t.id), t);
     },
-    deleteTemplate(id) {
-      removeFile(fileOf('templates', assertSafeRepositoryId(id)));
+    async deleteTemplate(id) {
+      const safeId = assertSafeRepositoryId(id);
+      removeFile(fileOf('templates', safeId));
+      // 版本文件随模板一起清理，避免孤儿版本被素材引用检查误判
+      for (const vid of listIds('versions')) {
+        if (!isSafeIdLike(vid)) continue;
+        const value = readJson<unknown>(fileOf('versions', vid), null);
+        if (isVersionRecord(value) && value.templateId === safeId) removeFile(fileOf('versions', vid));
+      }
     },
 
     // 版本文件平铺在 versions/ 下：getVersion 只拿得到版本 id，不做模板子目录。
-    listVersionMetas(templateId) {
+    async listVersionMetas(templateId) {
       const safeId = assertSafeRepositoryId(templateId);
       const out: TemplateVersionMeta[] = [];
       for (const id of listIds('versions')) {
@@ -125,14 +133,14 @@ function templateRepository(): TemplateRepository {
       }
       return out.sort(compareCreatedAsc);
     },
-    getVersion(id) {
+    async getVersion(id) {
       return getRecord('versions', id, isVersionRecord);
     },
-    putVersion(v) {
+    async putVersion(v) {
       assertWritable(v, v?.id);
       writeJsonAtomic(fileOf('versions', v.id), v);
     },
-    countVersions(templateId) {
+    async countVersions(templateId) {
       const safeId = assertSafeRepositoryId(templateId);
       let count = 0;
       for (const id of listIds('versions')) {
@@ -143,13 +151,13 @@ function templateRepository(): TemplateRepository {
       return count;
     },
 
-    listCategories() {
+    async listCategories() {
       return readCategories();
     },
-    putCategory(c) {
+    async putCategory(c) {
       assertWritable(c, c?.id);
       const value = structuredClone(c);
-      return mutateCategories((list) => {
+      await mutateCategories((list) => {
         const at = list.findIndex((x) => x.id === value.id);
         if (at === -1) return [...list, value];
         const next = [...list];
@@ -157,31 +165,31 @@ function templateRepository(): TemplateRepository {
         return next;
       });
     },
-    deleteCategory(id) {
+    async deleteCategory(id) {
       const safeId = assertSafeRepositoryId(id);
-      return mutateCategories((list) => list.filter((x) => x.id !== safeId));
+      await mutateCategories((list) => list.filter((x) => x.id !== safeId));
     },
   };
 }
 
 function assetRepository(): AssetRepository {
   return {
-    listAssets() {
+    async listAssets() {
       return listRecords('assets', isAssetRecord).sort(compareCreatedDesc);
     },
-    getAsset(id) {
+    async getAsset(id) {
       return getRecord('assets', id, isAssetRecord);
     },
-    putAsset(a) {
+    async putAsset(a) {
       assertWritable(a, a?.id);
       writeJsonAtomic(fileOf('assets', a.id), a);
     },
-    deleteAsset(id) {
+    async deleteAsset(id) {
       const safeId = assertSafeRepositoryId(id);
       removeFile(fileOf('assets', safeId));
       removeFile(fileOf('assets', safeId, 'bin'));
     },
-    readAssetBody(id) {
+    async readAssetBody(id) {
       const file = fileOf('assets', assertSafeRepositoryId(id), 'bin');
       try {
         const st = fs.statSync(file);
@@ -191,7 +199,7 @@ function assetRepository(): AssetRepository {
         return null;
       }
     },
-    writeAssetBody(id, body) {
+    async writeAssetBody(id, body) {
       const safeId = assertSafeRepositoryId(id);
       if (!Buffer.isBuffer(body)) throw new Error('非法写入数据');
       writeFileAtomic(fileOf('assets', safeId, 'bin'), body);
@@ -201,28 +209,31 @@ function assetRepository(): AssetRepository {
 
 function audienceRepository(): AudienceRepository {
   return {
-    listAudiences() {
+    async listAudiences() {
       return listRecords('audiences', isAudienceRecord).sort(compareCreatedDesc);
     },
-    getAudience(id) {
+    async getAudience(id) {
       return getRecord('audiences', id, isAudienceRecord);
     },
-    putAudience(a) {
+    async putAudience(a) {
       assertWritable(a, a?.id);
       writeJsonAtomic(fileOf('audiences', a.id), a);
+    },
+    async deleteAudience(id) {
+      removeFile(fileOf('audiences', assertSafeRepositoryId(id)));
     },
   };
 }
 
 function preparationRepository(): PreparationRepository {
   return {
-    listPreparations() {
+    async listPreparations() {
       return listRecords('preparations', isPreparationRecord).sort(compareUpdatedDesc);
     },
-    getPreparation(id) {
+    async getPreparation(id) {
       return getRecord('preparations', id, isPreparationRecord);
     },
-    putPreparation(p) {
+    async putPreparation(p) {
       assertWritable(p, p?.id);
       writeJsonAtomic(fileOf('preparations', p.id), p);
     },
@@ -231,10 +242,10 @@ function preparationRepository(): PreparationRepository {
 
 function integrationRepository(): IntegrationRepository {
   return {
-    read() {
+    async read() {
       return normalizeIntegrations(readJson<unknown>(integrationsPath(), null)) ?? defaultIntegrations();
     },
-    write(next) {
+    async write(next) {
       const value = normalizeIntegrations(next);
       if (!value) throw new Error('非法写入数据');
       writeJsonAtomic(integrationsPath(), { ...value, schemaVersion: EDM_SCHEMA_VERSION });
@@ -244,13 +255,13 @@ function integrationRepository(): IntegrationRepository {
 
 function operationRepository(): OperationRepository {
   return {
-    listOperations() {
+    async listOperations() {
       return listRecords('operations', isOperationRecord).sort(compareCreatedDesc);
     },
-    getOperation(id) {
+    async getOperation(id) {
       return getRecord('operations', id, isOperationRecord);
     },
-    putOperation(o) {
+    async putOperation(o) {
       assertWritable(o, o?.id);
       writeJsonAtomic(fileOf('operations', o.id), o);
     },

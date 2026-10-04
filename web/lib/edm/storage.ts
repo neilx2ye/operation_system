@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// 本地文件存储底座：路径解析、原子写入、损坏恢复。
+// 本地文件存储底座（file 适配器用）：路径解析、原子写入、损坏恢复。默认后端是 PostgreSQL，见 lib/db/。
 // 仅用于单实例、有持久磁盘的受控部署；多实例并发不在本期范围。
 //
 // OPS_DATA_DIR 必须是明确路径：一旦工作目录变化，不能把数据写进旧 EDM 目录。

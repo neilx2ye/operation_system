@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   try {
     const b = await readJsonBody(req);
     const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map((v) => String(v)).filter((v) => /^[A-Za-z0-9_-]{1,64}$/.test(v)))].slice(0, 500) : [];
-    const { binding, marketing } = getIntegrationState();
+    const { binding, marketing } = await getIntegrationState();
     const statuses: Record<string, KlaviyoMarketingStatus> = {};
     for (const id of ids) {
       const s = marketing[identityKey(binding.storeKey, binding.accountId, id)];

@@ -12,7 +12,7 @@ const STATUSES: TemplateStatus[] = ['draft', 'ready', 'archived'];
 export async function GET(_req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
-    return NextResponse.json(getTemplateBundle(id));
+    return NextResponse.json(await getTemplateBundle(id));
   } catch (e) {
     return errorResponse(e);
   }
@@ -33,7 +33,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if ('subject' in b) patch.subject = str(b.subject);
     if ('previewText' in b) patch.previewText = str(b.previewText);
     if ('status' in b && STATUSES.includes(b.status as TemplateStatus)) patch.status = b.status as TemplateStatus;
-    return NextResponse.json({ template: updateTemplate(id, patch) });
+    return NextResponse.json({ template: await updateTemplate(id, patch) });
   } catch (e) {
     return errorResponse(e);
   }
@@ -42,7 +42,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
-    deleteTemplate(id);
+    await deleteTemplate(id);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return errorResponse(e);

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { allOrderRows, orderDetail, type OrderDetail, type OrderRow } from '@/lib/mock';
+import { readShipments } from '@/lib/db/docs';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,15 +13,10 @@ type Shipment = {
   shopifySkipped?: boolean;
 };
 
-const SHIPMENTS_FILE = path.join(process.cwd(), 'data', 'shipments.json');
 const norm = (id: string) => (id.startsWith('#') ? id : '#' + id);
 
 async function loadShipments(): Promise<Record<string, Shipment>> {
-  try {
-    return JSON.parse(await fs.readFile(SHIPMENTS_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
+  return (await readShipments()) as Record<string, Shipment>;
 }
 
 function mergeLogistics<T extends OrderRow>(row: T, shipment: Shipment | null): T {
@@ -53,10 +47,10 @@ export async function GET(req: Request) {
 
   if (id) {
     const orderId = norm(id);
-    const detail = orderDetail(orderId);
+    const detail = await orderDetail(orderId);
     if (!detail) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json(mergeLogistics(detail as OrderDetail, shipments[orderId] ?? null));
   }
 
-  return NextResponse.json(allOrderRows().map((row) => mergeLogistics(row, shipments[norm(row.id)] ?? null)));
+  return NextResponse.json((await allOrderRows()).map((row) => mergeLogistics(row, shipments[norm(row.id)] ?? null)));
 }

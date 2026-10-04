@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 /** 脱敏状态：不返回私钥，只返回「是否已配置」与末位掩码 */
 export async function GET(req: NextRequest) {
   try {
-    const binding = getBinding();
+    const binding = await getBinding();
     const access = accessSummary(req);
     const envWrites = writesEnabledByEnv();
     return NextResponse.json({

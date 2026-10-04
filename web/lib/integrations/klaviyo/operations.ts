@@ -23,7 +23,7 @@ import {
 import { customersByIds, type SourcedCustomer } from '@/lib/customer-source';
 import { segmentOf } from '@/lib/customer-segmentation';
 import { loadTags } from '@/lib/customer-tags';
-import type { KlaviyoMarketingStatus, Operation } from '@/lib/edm/types';
+import type { AudienceSnapshot, KlaviyoMarketingStatus, Operation } from '@/lib/edm/types';
 import { outcomeOf } from './client';
 import { confirmList, confirmProfiles, confirmTemplate, requireWrite, type WriteContext } from './write-gate';
 import { assertHtmlEditable, createRemoteTemplate, getRemoteTemplate, updateRemoteTemplate } from './templates';
@@ -45,10 +45,10 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 export type Candidate = { customer: SourcedCustomer; emailKey: string };
 
 /** 按快照里的客户 ID 在服务端重新解析真实客户；Mock、无邮箱、异常邮箱、重复邮箱一律剔除 */
-export function resolveCandidates(audienceId: string): { audience: ReturnType<typeof loadAudience>['audience']; candidates: Candidate[] } {
-  const { audience, valid, invalidReason } = loadAudience(audienceId);
+export async function resolveCandidates(audienceId: string): Promise<{ audience: AudienceSnapshot; candidates: Candidate[] }> {
+  const { audience, valid, invalidReason } = await loadAudience(audienceId);
   if (!valid) throw conflict(`受众快照已失效：${invalidReason}。请在用户页面重新选择并确认后再试`, { invalidReason });
-  const rows = customersByIds(audience.customerIds);
+  const rows = await customersByIds(audience.customerIds);
   const seen = new Set<string>();
   const candidates: Candidate[] = [];
   for (const r of rows) {
@@ -80,9 +80,9 @@ export function sanitizeFields(input: unknown): AssignableField[] {
  * 缺失的字段直接省略，不用 null 去清空远端。
  * 货币单位无法核实时不推送裸 LTV 金额。
  */
-export function buildProfileProperties(customer: SourcedCustomer, fields: AssignableField[], currency: string | null): Record<string, unknown> {
+export async function buildProfileProperties(customer: SourcedCustomer, fields: AssignableField[], currency: string | null): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
-  const tags = loadTags();
+  const tags = await loadTags();
   for (const f of fields) {
     switch (f) {
       case 'ops_customer_ref':
@@ -147,8 +147,8 @@ export async function preflight(
 
   if (input.kind === 'template') {
     if (!input.templateId) throw badRequest('缺少 templateId');
-    const bundle = getTemplateBundle(input.templateId);
-    const version = input.versionId ? getVersion(input.templateId, input.versionId) : bundle.version;
+    const bundle = await getTemplateBundle(input.templateId);
+    const version = input.versionId ? await getVersion(input.templateId, input.versionId) : bundle.version;
     const summary: Record<string, unknown> = {
       account: ctx.binding.accountId,
       accountLabel: ctx.binding.accountLabel,
@@ -159,7 +159,7 @@ export async function preflight(
     };
 
     const localIds = extractLocalAssetIds(version.html);
-    const assets = new Map(listAssets().map((a) => [a.id, a]));
+    const assets = new Map((await listAssets()).map((a) => [a.id, a]));
     const missing = localIds.filter((id) => !assets.has(id));
     if (missing.length) blockers.push(`模板引用了不存在的本地素材：${missing.join(', ')}`);
 
@@ -208,7 +208,7 @@ export async function preflight(
 
   if (input.kind === 'profile' || input.kind === 'list') {
     if (!input.audienceId) throw badRequest('缺少 audienceId');
-    const { audience, candidates } = resolveCandidates(input.audienceId);
+    const { audience, candidates } = await resolveCandidates(input.audienceId);
     const hash = candidateHashOf(audience.sourceRevision, candidates);
     const fields = sanitizeFields(input.fields);
     const currency = (input.currency ?? '').trim().toUpperCase() || null;
@@ -235,7 +235,7 @@ export async function preflight(
       if (fields.includes('ops_ltv') && !currency) blockers.push('推送 ops_ltv 前必须确认货币单位（无法核实的金额不上传）');
       if (!candidates.length) blockers.push('该受众没有可用的有效邮箱');
 
-      const known = getIntegrationState();
+      const known = await getIntegrationState();
       const mapped = candidates.filter((c) => known.identities[identityKey(audience.storeKey, ctx.binding.accountId, c.customer.id)]).length;
       summary.alreadyMapped = mapped;
       summary.willCreateOrUpdate = candidates.length;
@@ -244,7 +244,7 @@ export async function preflight(
     }
 
     if (!input.listId) throw badRequest('缺少 listId');
-    const cachedList = getIntegrationState().lists.find((l) => l.id === input.listId);
+    const cachedList = (await getIntegrationState()).lists.find((l) => l.id === input.listId);
     summary.listId = input.listId;
     summary.listName = cachedList?.name ?? null;
     if (!cachedList) warnings.push('目标名单不在本地缓存里，请先在设置页刷新名单列表以确认名称');
@@ -265,13 +265,13 @@ export async function preflight(
 export type TemplateSyncInput = { templateId: string; versionId?: string; onConflict?: 'fail' | 'new'; confirm: string };
 
 export async function runTemplateSync(ctx: WriteContext, input: TemplateSyncInput): Promise<Operation> {
-  const bundle = getTemplateBundle(input.templateId);
-  const version = input.versionId ? getVersion(input.templateId, input.versionId) : bundle.version;
+  const bundle = await getTemplateBundle(input.templateId);
+  const version = input.versionId ? await getVersion(input.templateId, input.versionId) : bundle.version;
   if (input.confirm !== confirmTemplate(bundle.template.id, version.hash)) {
     throw badRequest('确认信息与当前模板版本不一致，请重新确认后再推送', { expected: confirmTemplate(bundle.template.id, version.hash) });
   }
 
-  const op = createOperation({
+  const op = await createOperation({
     kind: 'template_sync',
     accountId: ctx.binding.accountId,
     storeKey: ctx.storeKey,
@@ -281,7 +281,7 @@ export async function runTemplateSync(ctx: WriteContext, input: TemplateSyncInpu
 
   try {
     // 1) 冻结发布快照：本地素材上传后替换成远端地址
-    const assets = new Map(listAssets().map((a) => [a.id, a]));
+    const assets = new Map((await listAssets()).map((a) => [a.id, a]));
     const mapping: Record<string, string> = {};
     let uploadedCount = 0;
     for (const id of extractLocalAssetIds(version.html)) {
@@ -291,22 +291,22 @@ export async function runTemplateSync(ctx: WriteContext, input: TemplateSyncInpu
         mapping[id] = asset.uploaded.url;
         continue;
       }
-      const { body } = readAssetBody(id);
+      const { body } = await readAssetBody(id);
       const up = await uploadImage({ filename: asset.filename, mime: asset.mime, body, name: asset.filename }, ctx.cfg);
       mapping[id] = up.url;
-      recordAssetUpload(id, up.url, ctx.binding.accountId as string);
+      await recordAssetUpload(id, up.url, ctx.binding.accountId as string);
       uploadedCount++;
     }
     const publishedHtml = replaceLocalAssetIds(version.html, mapping);
-    appendStep(op.id, step('冻结发布快照', 'ok', uploadedCount, uploadedCount ? `已上传 ${uploadedCount} 张素材并替换为远端地址` : '没有需要上传的本地素材'));
+    await appendStep(op.id, step('冻结发布快照', 'ok', uploadedCount, uploadedCount ? `已上传 ${uploadedCount} 张素材并替换为远端地址` : '没有需要上传的本地素材'));
 
     const lint = lintEmailHtml(publishedHtml, { knownAssetIds: [...assets.keys()] });
     if (!lint.ok) {
       const detail = lint.issues.filter((i) => i.level === 'error').map((i) => i.message).join('；');
-      appendStep(op.id, step('发布前检查', 'fail', null, detail));
-      return finishOperation(op.id, 'failed', { summary: `发布前检查未通过：${detail}` });
+      await appendStep(op.id, step('发布前检查', 'fail', null, detail));
+      return await finishOperation(op.id, 'failed', { summary: `发布前检查未通过：${detail}` });
     }
-    appendStep(op.id, step('发布前检查', 'ok', null, '邮件 HTML 检查通过'));
+    await appendStep(op.id, step('发布前检查', 'ok', null, '邮件 HTML 检查通过'));
 
     // 2) 决定创建还是更新；更新前核对远端是否被他人修改
     let remoteId = bundle.template.remote && bundle.template.remote.accountId === ctx.binding.accountId ? bundle.template.remote.remoteId : null;
@@ -317,38 +317,38 @@ export async function runTemplateSync(ctx: WriteContext, input: TemplateSyncInpu
       assertHtmlEditable(remote.editorType, remoteId);
       const changed = Boolean(bundle.template.remote?.remoteFingerprint && remote.updated && remote.updated !== bundle.template.remote.remoteFingerprint);
       if (changed && input.onConflict !== 'new') {
-        appendStep(op.id, step('远端冲突检测', 'fail', null, `远端 updated=${remote.updated} 与记录不一致`));
-        return finishOperation(op.id, 'failed', {
+        await appendStep(op.id, step('远端冲突检测', 'fail', null, `远端 updated=${remote.updated} 与记录不一致`));
+        return await finishOperation(op.id, 'failed', {
           summary: '远端模板已被其他人修改，已阻止覆盖。请选择「另存为新模板」或先核对远端内容',
           resumable: false,
         });
       }
       if (changed) {
-        appendStep(op.id, step('远端冲突检测', 'skip', null, '远端已被修改，按操作员选择改为另存为新模板'));
+        await appendStep(op.id, step('远端冲突检测', 'skip', null, '远端已被修改，按操作员选择改为另存为新模板'));
         remoteId = null;
       } else {
-        appendStep(op.id, step('远端冲突检测', 'ok', null, '远端模板与记录一致'));
+        await appendStep(op.id, step('远端冲突检测', 'ok', null, '远端模板与记录一致'));
       }
     }
 
     if (remoteId) {
       const r = await updateRemoteTemplate(remoteId, { name: bundle.template.name, html: publishedHtml }, ctx.cfg);
       fingerprint = r.updated;
-      appendStep(op.id, step('更新远端模板', 'ok', 1, `模板 ${r.id} 内容已更新`));
+      await appendStep(op.id, step('更新远端模板', 'ok', 1, `模板 ${r.id} 内容已更新`));
     } else {
       const r = await createRemoteTemplate({ name: bundle.template.name, html: publishedHtml }, ctx.cfg);
       remoteId = r.id;
       fingerprint = r.updated;
-      appendStep(op.id, step('创建远端模板', 'ok', 1, `已创建 CODE 模板 ${r.id}`));
+      await appendStep(op.id, step('创建远端模板', 'ok', 1, `已创建 CODE 模板 ${r.id}`));
     }
 
-    bindRemoteTemplate(bundle.template.id, { accountId: ctx.binding.accountId as string, remoteId, syncedAt: nowIso(), remoteFingerprint: fingerprint });
-    cacheRemoteTemplate(bundle.template.id, { remoteId, name: bundle.template.name, fingerprint, checkedAt: nowIso() });
-    return finishOperation(op.id, 'done', { summary: `模板已同步到远端 ${remoteId}（不等同于发送，也不会创建 Campaign）` });
+    await bindRemoteTemplate(bundle.template.id, { accountId: ctx.binding.accountId as string, remoteId, syncedAt: nowIso(), remoteFingerprint: fingerprint });
+    await cacheRemoteTemplate(bundle.template.id, { remoteId, name: bundle.template.name, fingerprint, checkedAt: nowIso() });
+    return await finishOperation(op.id, 'done', { summary: `模板已同步到远端 ${remoteId}（不等同于发送，也不会创建 Campaign）` });
   } catch (e) {
     const outcome = outcomeOf(e);
-    appendStep(op.id, step('推送模板', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
-    return finishOperation(op.id, outcome === 'unknown' ? 'unknown' : 'failed', {
+    await appendStep(op.id, step('推送模板', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
+    return await finishOperation(op.id, outcome === 'unknown' ? 'unknown' : 'failed', {
       resumable: outcome === 'unknown',
       summary: outcome === 'unknown' ? '推送结果不明：请先到 Klaviyo 核对是否已创建/更新模板，再决定是否重试' : `推送失败：${messageOf(e)}`,
     });
@@ -360,7 +360,7 @@ export async function runTemplateSync(ctx: WriteContext, input: TemplateSyncInpu
 export type ProfileSyncInput = { audienceId: string; fields?: unknown; currency?: string | null; confirm: string };
 
 export async function runProfileSync(ctx: WriteContext, input: ProfileSyncInput): Promise<Operation> {
-  const { audience, candidates } = resolveCandidates(input.audienceId);
+  const { audience, candidates } = await resolveCandidates(input.audienceId);
   const hash = candidateHashOf(audience.sourceRevision, candidates);
   if (input.confirm !== confirmProfiles(audience.id, hash)) {
     throw badRequest('确认信息与当前受众不一致，请重新确认后再同步', { expected: confirmProfiles(audience.id, hash) });
@@ -370,7 +370,7 @@ export async function runProfileSync(ctx: WriteContext, input: ProfileSyncInput)
   const currency = (input.currency ?? '').trim().toUpperCase() || null;
   if (fields.includes('ops_ltv') && !currency) throw badRequest('推送 ops_ltv 前必须确认货币单位');
 
-  const op = createOperation({
+  const op = await createOperation({
     kind: 'profile_sync',
     accountId: ctx.binding.accountId,
     storeKey: ctx.storeKey,
@@ -391,7 +391,7 @@ export async function runProfileSync(ctx: WriteContext, input: ProfileSyncInput)
       continue;
     }
     try {
-      const res = await upsertProfile({ email: emailKey, properties: buildProfileProperties(customer, fields, currency) }, ctx.cfg);
+      const res = await upsertProfile({ email: emailKey, properties: await buildProfileProperties(customer, fields, currency) }, ctx.cfg);
       entries.push({
         key: identityKey(audience.storeKey, ctx.binding.accountId, customer.id),
         identity: { profileId: res.profileId, email: emailKey, verifiedAt: nowIso(), source: 'import' },
@@ -406,22 +406,22 @@ export async function runProfileSync(ctx: WriteContext, input: ProfileSyncInput)
         failCount++;
       }
       // 记录里只写内部 ID，不写邮箱
-      appendStep(op.id, step('写入资料', 'fail', 1, `${customer.id}：${messageOf(e)}`));
+      await appendStep(op.id, step('写入资料', 'fail', 1, `${customer.id}：${messageOf(e)}`));
     }
   }
 
-  cacheIdentities(entries);
-  appendStep(op.id, step('写入资料', okCount ? 'ok' : 'fail', okCount, `成功 ${okCount} · 失败 ${failCount} · 结果不明 ${unknownCount}`));
+  await cacheIdentities(entries);
+  await appendStep(op.id, step('写入资料', okCount ? 'ok' : 'fail', okCount, `成功 ${okCount} · 失败 ${failCount} · 结果不明 ${unknownCount}`));
 
   const resumeCtx = { audienceId: audience.id, fields, currency };
   if (pending.length) {
-    return finishOperation(op.id, 'awaiting_resume', {
+    return await finishOperation(op.id, 'awaiting_resume', {
       resumable: true,
       pending: { ids: pending.slice(0, 5000), note: '剩余的客户尚未处理，可能是时间预算用尽或写入结果不明；继续前请先核对远端', ...resumeCtx },
       summary: `资料已同步 ${okCount} 位，仍有 ${pending.length} 位待处理`,
     });
   }
-  return finishOperation(op.id, failCount ? 'partial' : 'done', {
+  return await finishOperation(op.id, failCount ? 'partial' : 'done', {
     summary: `资料已同步 ${okCount} 位${failCount ? `，失败 ${failCount} 位` : ''}（未订阅、未加入名单）`,
   });
 }
@@ -431,14 +431,14 @@ export async function runProfileSync(ctx: WriteContext, input: ProfileSyncInput)
 export type ListSyncInput = { audienceId: string; listId: string; confirm: string };
 
 export async function runListSync(ctx: WriteContext, input: ListSyncInput): Promise<Operation> {
-  const { audience, candidates } = resolveCandidates(input.audienceId);
+  const { audience, candidates } = await resolveCandidates(input.audienceId);
   const hash = candidateHashOf(audience.sourceRevision, candidates);
   if (input.confirm !== confirmList(input.listId, audience.id, hash)) {
     throw badRequest('确认信息与当前受众不一致，请重新确认后再提交名单', { expected: confirmList(input.listId, audience.id, hash) });
   }
   if (audience.dataSource === 'mock') throw badRequest('演示数据不能写入真实名单');
 
-  const op = createOperation({
+  const op = await createOperation({
     kind: 'list_sync',
     accountId: ctx.binding.accountId,
     storeKey: ctx.storeKey,
@@ -483,14 +483,14 @@ export async function runListSync(ctx: WriteContext, input: ListSyncInput): Prom
       }
       eligible.push(hit.id);
     }
-    cacheIdentities(entries);
-    appendStep(
+    await cacheIdentities(entries);
+    await appendStep(
       op.id,
       step('刷新订阅/抑制状态', 'ok', remote.length, `匹配 ${remote.length} · 未匹配 ${notFound} · 不符合本期订阅规则 ${excluded}`),
     );
 
     if (!eligible.length) {
-      return finishOperation(op.id, 'done', {
+      return await finishOperation(op.id, 'done', {
         summary: '按本期订阅规则没有符合条件的客户，未提交任何名单变更',
         pending: null,
       });
@@ -501,24 +501,24 @@ export async function runListSync(ctx: WriteContext, input: ListSyncInput): Prom
       cfg: ctx.cfg,
       batchSize: LIST_BATCH,
       deadline,
-      onBatch: (p) => appendStep(op.id, step('加入名单', 'ok', p.sent, `已提交 ${p.sent}/${p.total}（第 ${p.batch} 批）`)),
+      onBatch: async (p) => await appendStep(op.id, step('加入名单', 'ok', p.sent, `已提交 ${p.sent}/${p.total}（第 ${p.batch} 批）`)),
     });
 
     if (res.remaining.length) {
-      return finishOperation(op.id, 'awaiting_resume', {
+      return await finishOperation(op.id, 'awaiting_resume', {
         resumable: true,
         pending: { ids: res.remaining, note: '剩余成员尚未提交，继续前会先读回名单成员做去重', ...resumeCtx },
         summary: `名单已更新：提交 ${res.sent} 位，仍有 ${res.remaining.length} 位待提交`,
       });
     }
-    return finishOperation(op.id, 'done', {
+    return await finishOperation(op.id, 'done', {
       summary: `名单已更新：提交 ${res.sent} 位（只增加成员，未做全量覆盖）`,
       pending: null,
     });
   } catch (e) {
     const outcome = outcomeOf(e);
-    appendStep(op.id, step('加入名单', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
-    return finishOperation(op.id, outcome === 'unknown' ? 'unknown' : 'failed', {
+    await appendStep(op.id, step('加入名单', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
+    return await finishOperation(op.id, outcome === 'unknown' ? 'unknown' : 'failed', {
       resumable: outcome === 'unknown',
       pending: outcome === 'unknown' ? { ids: [], note: '提交中断，尚未确认远端名单状态；继续前会先读回成员做去重', ...resumeCtx } : null,
       summary: outcome === 'unknown' ? '提交结果不明：请先到 Klaviyo 名单里核对成员，再决定是否继续' : `名单提交失败：${messageOf(e)}`,
@@ -533,7 +533,7 @@ export async function runListSync(ctx: WriteContext, input: ListSyncInput): Prom
  * 恢复前会重新校验受众快照；快照失效则拒绝，避免拿旧范围去写真实账号。
  */
 export async function resumeOperation(req: Request, id: string): Promise<Operation> {
-  const record = getOperation(id);
+  const record = await getOperation(id);
   if (!record.resumable) throw conflict(`该执行记录当前状态是 ${record.status}，不需要恢复`);
   if (record.status !== 'awaiting_resume' && record.status !== 'unknown') {
     throw conflict(`该执行记录当前状态是 ${record.status}，不需要恢复`);
@@ -541,11 +541,11 @@ export async function resumeOperation(req: Request, id: string): Promise<Operati
   if (record.kind === 'template_sync') {
     throw conflict('模板推送结果不明时不能自动重试：请先到 Klaviyo 核对远端模板，再决定是否重新推送');
   }
-  const ctx = requireWrite(req, { customerData: true });
+  const ctx = await requireWrite(req, { customerData: true });
   const audienceId = record.pending?.audienceId;
   if (!audienceId) throw conflict('执行记录缺少受众信息，无法安全恢复，请重新发起');
   // 重新校验：过期或数据源已变化的快照一律拒绝
-  const { audience } = resolveCandidates(audienceId);
+  const { audience } = await resolveCandidates(audienceId);
 
   if (record.kind === 'profile_sync') return resumeProfileSync(ctx, record, audience.storeKey);
   if (record.kind === 'list_sync') return resumeListSync(ctx, record);
@@ -558,7 +558,7 @@ async function resumeProfileSync(ctx: WriteContext, record: Operation, storeKey:
   if (!fields.length) throw conflict('执行记录缺少字段信息，无法安全恢复，请重新发起');
   if (fields.includes('ops_ltv') && !currency) throw conflict('原操作缺少已确认的货币单位，无法继续推送 LTV');
 
-  const rows = customersByIds(record.pending?.ids ?? []);
+  const rows = await customersByIds(record.pending?.ids ?? []);
   const deadline = Date.now() + SYNC_BUDGET_MS;
   const entries: Parameters<typeof cacheIdentities>[0] = [];
   const stillPending: string[] = [];
@@ -577,7 +577,7 @@ async function resumeProfileSync(ctx: WriteContext, record: Operation, storeKey:
     }
     try {
       // 资料写入是按键值合并的 upsert，重复提交同一份属性不会产生副作用
-      const res = await upsertProfile({ email: r.emailKey, properties: buildProfileProperties(r, fields, currency) }, ctx.cfg);
+      const res = await upsertProfile({ email: r.emailKey, properties: await buildProfileProperties(r, fields, currency) }, ctx.cfg);
       entries.push({
         key: identityKey(storeKey, ctx.binding.accountId, r.id),
         identity: { profileId: res.profileId, email: r.emailKey, verifiedAt: nowIso(), source: 'import' },
@@ -591,21 +591,21 @@ async function resumeProfileSync(ctx: WriteContext, record: Operation, storeKey:
       } else {
         failCount++;
       }
-      appendStep(record.id, step('恢复写入资料', 'fail', 1, `${r.id}：${messageOf(e)}`));
+      await appendStep(record.id, step('恢复写入资料', 'fail', 1, `${r.id}：${messageOf(e)}`));
     }
   }
 
-  cacheIdentities(entries);
-  appendStep(record.id, step('恢复写入资料', okCount ? 'ok' : 'fail', okCount, `成功 ${okCount} · 失败 ${failCount} · 结果不明 ${unknownCount}`));
+  await cacheIdentities(entries);
+  await appendStep(record.id, step('恢复写入资料', okCount ? 'ok' : 'fail', okCount, `成功 ${okCount} · 失败 ${failCount} · 结果不明 ${unknownCount}`));
 
   if (stillPending.length) {
-    return finishOperation(record.id, 'awaiting_resume', {
+    return await finishOperation(record.id, 'awaiting_resume', {
       resumable: true,
       pending: { ...record.pending, ids: stillPending, note: '仍有客户未处理' } as Operation['pending'],
       summary: `资料已继续同步 ${okCount} 位，剩余 ${stillPending.length} 位`,
     });
   }
-  return finishOperation(record.id, failCount ? 'partial' : 'done', {
+  return await finishOperation(record.id, failCount ? 'partial' : 'done', {
     resumable: false,
     pending: null,
     summary: `资料已继续同步 ${okCount} 位${failCount ? `，失败 ${failCount} 位` : ''}`,
@@ -624,10 +624,10 @@ async function resumeListSync(ctx: WriteContext, record: Operation): Promise<Ope
   }
   const requested = record.pending?.ids ?? [];
   const todo = requested.filter((pid) => !members.ids.has(pid));
-  appendStep(record.id, step('恢复前核对名单成员', 'ok', requested.length - todo.length, `已确认 ${requested.length - todo.length} 位已在名单中，将跳过`));
+  await appendStep(record.id, step('恢复前核对名单成员', 'ok', requested.length - todo.length, `已确认 ${requested.length - todo.length} 位已在名单中，将跳过`));
 
   if (!todo.length) {
-    return finishOperation(record.id, 'done', { resumable: false, pending: null, summary: '剩余成员都已在名单中，无需再提交' });
+    return await finishOperation(record.id, 'done', { resumable: false, pending: null, summary: '剩余成员都已在名单中，无需再提交' });
   }
 
   const deadline = Date.now() + SYNC_BUDGET_MS;
@@ -636,20 +636,20 @@ async function resumeListSync(ctx: WriteContext, record: Operation): Promise<Ope
       cfg: ctx.cfg,
       batchSize: LIST_BATCH,
       deadline,
-      onBatch: (p) => appendStep(record.id, step('恢复加入名单', 'ok', p.sent, `已提交 ${p.sent}/${p.total}`)),
+      onBatch: async (p) => await appendStep(record.id, step('恢复加入名单', 'ok', p.sent, `已提交 ${p.sent}/${p.total}`)),
     });
     if (res.remaining.length) {
-      return finishOperation(record.id, 'awaiting_resume', {
+      return await finishOperation(record.id, 'awaiting_resume', {
         resumable: true,
         pending: { ...record.pending, ids: res.remaining } as Operation['pending'],
         summary: `已继续提交 ${res.sent} 位，剩余 ${res.remaining.length} 位`,
       });
     }
-    return finishOperation(record.id, 'done', { resumable: false, pending: null, summary: `已继续提交 ${res.sent} 位` });
+    return await finishOperation(record.id, 'done', { resumable: false, pending: null, summary: `已继续提交 ${res.sent} 位` });
   } catch (e) {
     const outcome = outcomeOf(e);
-    appendStep(record.id, step('恢复加入名单', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
-    return finishOperation(record.id, outcome === 'unknown' ? 'unknown' : 'failed', {
+    await appendStep(record.id, step('恢复加入名单', outcome === 'unknown' ? 'unknown' : 'fail', null, messageOf(e)));
+    return await finishOperation(record.id, outcome === 'unknown' ? 'unknown' : 'failed', {
       resumable: outcome === 'unknown',
       summary: `继续提交失败：${messageOf(e)}`,
     });

@@ -60,49 +60,51 @@ function memoryTemplates(): TemplateRepository {
   const categories = new Map<string, TemplateCategory>();
 
   return {
-    listTemplates() {
+    async listTemplates() {
       return [...templates.values()].filter(isTemplateRecord).map(clone).sort(compareUpdatedDesc);
     },
-    getTemplate(id) {
+    async getTemplate(id) {
       const value = templates.get(assertSafeRepositoryId(id));
       return value && isTemplateRecord(value) ? clone(value) : null;
     },
-    putTemplate(t) {
+    async putTemplate(t) {
       assertWritable(t, t?.id);
       templates.set(t.id, clone(t));
     },
-    deleteTemplate(id) {
-      templates.delete(assertSafeRepositoryId(id));
+    async deleteTemplate(id) {
+      const safeId = assertSafeRepositoryId(id);
+      templates.delete(safeId);
+      for (const [vid, v] of versions) if (isVersionRecord(v) && v.templateId === safeId) versions.delete(vid);
     },
-    listVersionMetas(templateId) {
+    async listVersionMetas(templateId) {
       const safeId = assertSafeRepositoryId(templateId);
       return [...versions.values()]
         .filter((v) => isVersionRecord(v) && v.templateId === safeId)
         .map(toVersionMeta)
         .sort(compareCreatedAsc);
     },
-    getVersion(id) {
+    async getVersion(id) {
       const value = versions.get(assertSafeRepositoryId(id));
       return value && isVersionRecord(value) ? clone(value) : null;
     },
-    putVersion(v) {
+    async putVersion(v) {
       assertWritable(v, v?.id);
       versions.set(v.id, clone(v));
     },
-    countVersions(templateId) {
+    async countVersions(templateId) {
       const safeId = assertSafeRepositoryId(templateId);
       let count = 0;
       for (const v of versions.values()) if (isVersionRecord(v) && v.templateId === safeId) count += 1;
       return count;
     },
-    listCategories() {
+    async listCategories() {
       return [...categories.values()].filter(isCategoryRecord).map(clone);
     },
-    putCategory(c) {
+    async putCategory(c) {
       assertWritable(c, c?.id);
       categories.set(c.id, clone(c));
     },
-    deleteCategory(id) {
+    async deleteCategory(id) {
       categories.delete(assertSafeRepositoryId(id));
     },
   };
@@ -113,27 +115,27 @@ function memoryAssets(): AssetRepository {
   const bodies = new Map<string, Buffer>();
 
   return {
-    listAssets() {
+    async listAssets() {
       return [...assets.values()].filter(isAssetRecord).map(clone).sort(compareCreatedDesc);
     },
-    getAsset(id) {
+    async getAsset(id) {
       const value = assets.get(assertSafeRepositoryId(id));
       return value && isAssetRecord(value) ? clone(value) : null;
     },
-    putAsset(a) {
+    async putAsset(a) {
       assertWritable(a, a?.id);
       assets.set(a.id, clone(a));
     },
-    deleteAsset(id) {
+    async deleteAsset(id) {
       const safeId = assertSafeRepositoryId(id);
       assets.delete(safeId);
       bodies.delete(safeId);
     },
-    readAssetBody(id) {
+    async readAssetBody(id) {
       const body = bodies.get(assertSafeRepositoryId(id));
       return body ? Buffer.from(body) : null;
     },
-    writeAssetBody(id, body) {
+    async writeAssetBody(id, body) {
       const safeId = assertSafeRepositoryId(id);
       if (!Buffer.isBuffer(body)) throw new Error('非法写入数据');
       bodies.set(safeId, Buffer.from(body));
@@ -145,16 +147,19 @@ function memoryAudiences(): AudienceRepository {
   const audiences = new Map<string, AudienceSnapshot>();
 
   return {
-    listAudiences() {
+    async listAudiences() {
       return [...audiences.values()].filter(isAudienceRecord).map(clone).sort(compareCreatedDesc);
     },
-    getAudience(id) {
+    async getAudience(id) {
       const value = audiences.get(assertSafeRepositoryId(id));
       return value && isAudienceRecord(value) ? clone(value) : null;
     },
-    putAudience(a) {
+    async putAudience(a) {
       assertWritable(a, a?.id);
       audiences.set(a.id, clone(a));
+    },
+    async deleteAudience(id) {
+      audiences.delete(assertSafeRepositoryId(id));
     },
   };
 }
@@ -163,14 +168,14 @@ function memoryPreparations(): PreparationRepository {
   const preparations = new Map<string, Preparation>();
 
   return {
-    listPreparations() {
+    async listPreparations() {
       return [...preparations.values()].filter(isPreparationRecord).map(clone).sort(compareUpdatedDesc);
     },
-    getPreparation(id) {
+    async getPreparation(id) {
       const value = preparations.get(assertSafeRepositoryId(id));
       return value && isPreparationRecord(value) ? clone(value) : null;
     },
-    putPreparation(p) {
+    async putPreparation(p) {
       assertWritable(p, p?.id);
       preparations.set(p.id, clone(p));
     },
@@ -181,10 +186,10 @@ function memoryIntegrations(): IntegrationRepository {
   let stored: IntegrationsFile | null = null;
 
   return {
-    read() {
+    async read() {
       return stored ? clone(stored) : defaultIntegrations();
     },
-    write(next) {
+    async write(next) {
       const value = normalizeIntegrations(next);
       if (!value) throw new Error('非法写入数据');
       stored = clone({ ...value, schemaVersion: EDM_SCHEMA_VERSION });
@@ -196,14 +201,14 @@ function memoryOperations(): OperationRepository {
   const operations = new Map<string, Operation>();
 
   return {
-    listOperations() {
+    async listOperations() {
       return [...operations.values()].filter(isOperationRecord).map(clone).sort(compareCreatedDesc);
     },
-    getOperation(id) {
+    async getOperation(id) {
       const value = operations.get(assertSafeRepositoryId(id));
       return value && isOperationRecord(value) ? clone(value) : null;
     },
-    putOperation(o) {
+    async putOperation(o) {
       assertWritable(o, o?.id);
       operations.set(o.id, clone(o));
     },

@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    deleteCategory(id);
+    await deleteCategory(id);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return errorResponse(e);

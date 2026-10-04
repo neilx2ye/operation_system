@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    const { asset, body } = readAssetBody(id);
+    const { asset, body } = await readAssetBody(id);
     // Buffer 是 Uint8Array<ArrayBufferLike>，显式复制成 ArrayBuffer 支撑的视图才能作为 BodyInit
     return new NextResponse(new Uint8Array(body), {
       headers: {
@@ -26,7 +26,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    deleteAsset(id);
+    await deleteAsset(id);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return errorResponse(e);

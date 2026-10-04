@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    return NextResponse.json({ audiences: listAudiencesPublic() });
+    return NextResponse.json({ audiences: await listAudiencesPublic() });
   } catch (e) {
     return errorResponse(e);
   }
@@ -16,7 +16,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const b = await readJsonBody(req);
-    return NextResponse.json({ audience: createAudience(parseAudienceRequest(b)) }, { status: 201 });
+    return NextResponse.json({ audience: await createAudience(parseAudienceRequest(b)) }, { status: 201 });
   } catch (e) {
     return errorResponse(e);
   }

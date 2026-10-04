@@ -9,7 +9,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const { id } = await ctx.params;
     const b = await readJsonBody(req);
-    return NextResponse.json(lintTemplate(id, typeof b.html === 'string' ? b.html : undefined));
+    return NextResponse.json(await lintTemplate(id, typeof b.html === 'string' ? b.html : undefined));
   } catch (e) {
     return errorResponse(e);
   }

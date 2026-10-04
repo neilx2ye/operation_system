@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const templateId = req.nextUrl.searchParams.get('templateId') ?? undefined;
-    return NextResponse.json({ preparations: listPreparations(templateId) });
+    return NextResponse.json({ preparations: await listPreparations(templateId) });
   } catch (e) {
     return errorResponse(e);
   }
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const b = await readJsonBody(req);
     return NextResponse.json(
       {
-        preparation: createPreparation({
+        preparation: await createPreparation({
           templateId: str(b.templateId),
           versionId: str(b.versionId) || undefined,
           audienceId: str(b.audienceId),

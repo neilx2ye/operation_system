@@ -108,7 +108,7 @@ export async function siteAnalytics(from: string, to: string): Promise<SiteAnaly
   const hit = MEM.get(key);
   if (hit && Date.now() - hit.at < TTL) return hit.data;
 
-  const cfg = shopifyConfig();
+  const cfg = await shopifyConfig();
   if (!cfg) throw new Error('未配置 Shopify 店铺域名 / Admin Token');
 
   const n = daysBetween(from, to);

@@ -48,15 +48,15 @@ export function emailStatusOf(raw: string | null | undefined): EmailStatus {
 
 let revisionCache: { key: string; revision: string } | null = null;
 
-export function currentSource(): SourceRevision {
-  const info = dataSourceInfo();
+export async function currentSource(): Promise<SourceRevision> {
+  const info = await dataSourceInfo();
   const dataSource = info.source as DataSource;
   const storeKey = dataSource === 'mock' ? 'mock' : (info.shop ?? 'shopify-unknown');
   const key = [dataSource, info.syncedAt ?? '', info.counts.customers, info.counts.orders, storeKey].join('|');
   if (revisionCache?.key === key) return { dataSource, storeKey, revision: revisionCache.revision, syncedAt: info.syncedAt };
   // 指纹覆盖实际内容：仅同步时间变化而内容不变时，不需要让快照失效
   const digest = sha256(
-    allCustomerRows()
+    (await allCustomerRows())
       .map((r) => `${r.id}:${r.orders}:${r.ltv}:${r.email}`)
       .sort()
       .join('\n'),
@@ -66,21 +66,21 @@ export function currentSource(): SourceRevision {
   return { dataSource, storeKey, revision, syncedAt: info.syncedAt };
 }
 
-export function listCustomers(): SourcedCustomer[] {
-  const { dataSource } = currentSource();
-  return allCustomerRows().map((r) => decorate(r, dataSource));
+export async function listCustomers(): Promise<SourcedCustomer[]> {
+  const { dataSource } = await currentSource();
+  return (await allCustomerRows()).map((r) => decorate(r, dataSource));
 }
 
-export function customerById(id: string): SourcedCustomer | null {
-  const row = allCustomerRows().find((r) => r.id === id);
+export async function customerById(id: string): Promise<SourcedCustomer | null> {
+  const row = (await allCustomerRows()).find((r) => r.id === id);
   if (!row) return null;
-  return decorate(row, currentSource().dataSource);
+  return decorate(row, (await currentSource()).dataSource);
 }
 
 /** 按 id 批量取，保持输入顺序，找不到的返回 null */
-export function customersByIds(ids: string[]): (SourcedCustomer | null)[] {
-  const { dataSource } = currentSource();
-  const map = new Map(allCustomerRows().map((r) => [r.id, r]));
+export async function customersByIds(ids: string[]): Promise<(SourcedCustomer | null)[]> {
+  const { dataSource } = await currentSource();
+  const map = new Map((await allCustomerRows()).map((r) => [r.id, r]));
   return ids.map((id) => {
     const row = map.get(id);
     return row ? decorate(row, dataSource) : null;

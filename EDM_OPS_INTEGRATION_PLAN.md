@@ -357,3 +357,17 @@ web/
 - [K14] Rate limits, status codes, and errors：`https://developers.klaviyo.com/en/docs/rate_limits_and_error_handling`
 
 本次实际操作范围：仅更新本根目录方案文件；未改业务代码、未安装依赖、未启动或重启服务、未访问旧数据库、未执行真实 Klaviyo 读写或发送。
+
+---
+
+## 后续更新：统一数据存储已接入 PostgreSQL
+
+原第 6 / 15 节「数据库稍后统一接入」的约定已完成落地：
+
+- 安装 PostgreSQL 18，建立 `ops` 库与用户；连接方式见 `web/DATABASE.md`。
+- `lib/edm/repositories/` 新增 PostgreSQL 适配器，`file`/`memory` 保留；仓储契约改为异步，
+  `lib/edm/service.ts` 与所有调用点相应 `await` 化。
+- 原先散落于 `web/data/*.json` 的运营数据（设置、客户标签、客户分组、运单、
+  商品目录覆盖、Shopify 同步缓存/状态）与 EDM 数据全部改为入库；新增 `lib/db/` 存储底座。
+- 提供幂等迁移脚本 `npm run db:migrate`，把既有 JSON 文件数据导入数据库。
+- 默认后端为 `postgres`，可用 `OPS_STORAGE=file` 回滚到文件实现。

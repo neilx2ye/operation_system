@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     if (!KINDS.includes(kind)) throw badRequest('kind 必须是 template、profile 或 list');
 
     const cfg = klaviyoConfig();
-    const binding = getBinding();
+    const binding = await getBinding();
     const gateBlockers: string[] = [];
     if (!cfg) gateBlockers.push('未配置 KLAVIYO_PRIVATE_API_KEY，真实写入不可用');
     else if (!cfg.writesEnabled) gateBlockers.push('服务端 KLAVIYO_ENABLE_WRITES 未开启，真实写入不可用');

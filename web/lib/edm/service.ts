@@ -1,6 +1,6 @@
 import { getRepositories } from './repositories';
 import { assertSafeId, newId, sha256 } from './ids';
-import { fileOf, removeFile } from './storage';
+import { withLock } from './storage';
 import { MAX_HTML_BYTES, extractLocalAssetIds, lintEmailHtml, normalizeAssetMime } from './html';
 import { badRequest, conflict, notFound, tooLarge, unsupported } from './http';
 import { ASSET_MAX_BYTES, type Asset, type AudienceCounts, type AudienceExclusionReason, type AudienceFilterSummary, type AudienceSnapshot, type CreatePreparationInput, type CreateTemplateInput, type LintResult, type Operation, type OperationKind, type OperationStep, type Preparation, type StepStatus, type Template, type TemplateCategory, type TemplateVersion, type TemplateVersionMeta, type UpdateTemplateInput, type KlaviyoBinding, type KlaviyoIdentity, type KlaviyoListRecord, type KlaviyoMarketingStatus } from './types';
@@ -13,46 +13,50 @@ export const AUDIENCE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const repo = () => getRepositories();
 
+// 说明：存储可能是异步的（PostgreSQL），因此以下服务函数全部为 async。
+// 读改写复合操作（模板修订号、集成文档、执行记录）用 storage.withLock 的进程内队列串行化，
+// 与旧实现「同步 fs 调用天然不可打断」的语义等价（单实例部署前提不变）。
+
 export function identityKey(storeKey: string, accountId: string | null, customerId: string): string {
   return `${storeKey}|${accountId ?? ''}|${customerId}`;
 }
 
 // ---------- 模板 ----------
 
-export function listTemplates(opts: { q?: string; categoryId?: string } = {}): { templates: Template[]; categories: TemplateCategory[] } {
+export async function listTemplates(opts: { q?: string; categoryId?: string } = {}): Promise<{ templates: Template[]; categories: TemplateCategory[] }> {
   const r = repo();
-  let templates = r.templates.listTemplates();
+  let templates = await r.templates.listTemplates();
   if (opts.categoryId) templates = templates.filter((t) => t.categoryId === opts.categoryId);
   const q = (opts.q ?? '').trim().toLowerCase();
   if (q) templates = templates.filter((t) => `${t.name}\n${t.subject}\n${t.previewText}`.toLowerCase().includes(q));
-  return { templates, categories: r.templates.listCategories() };
+  return { templates, categories: await r.templates.listCategories() };
 }
 
-function mustTemplate(id: string): Template {
+async function mustTemplate(id: string): Promise<Template> {
   assertSafeId(id, 'template');
-  const t = repo().templates.getTemplate(id);
+  const t = await repo().templates.getTemplate(id);
   if (!t) throw notFound('模板不存在');
   return t;
 }
 
 export type TemplateBundle = { template: Template; version: TemplateVersion; versions: TemplateVersionMeta[] };
 
-export function getTemplateBundle(id: string): TemplateBundle {
-  const template = mustTemplate(id);
+export async function getTemplateBundle(id: string): Promise<TemplateBundle> {
+  const template = await mustTemplate(id);
   const r = repo();
-  let version = r.templates.getVersion(template.currentVersionId);
+  let version = await r.templates.getVersion(template.currentVersionId);
   if (!version || version.templateId !== template.id) {
     // currentVersionId 指向丢失的版本：退回到最新版本并修好指针，而不是让页面空白
-    const metas = r.templates.listVersionMetas(template.id);
+    const metas = await r.templates.listVersionMetas(template.id);
     if (!metas.length) throw notFound('模板没有任何版本记录');
-    const fallback = r.templates.getVersion(metas[metas.length - 1].id);
+    const fallback = await r.templates.getVersion(metas[metas.length - 1].id);
     if (!fallback) throw notFound('模板版本文件损坏');
     version = fallback;
     const repaired: Template = { ...template, currentVersionId: fallback.id, revision: template.revision + 1, updatedAt: now() };
-    r.templates.putTemplate(repaired);
-    return { template: repaired, version, versions: r.templates.listVersionMetas(template.id) };
+    await r.templates.putTemplate(repaired);
+    return { template: repaired, version, versions: await r.templates.listVersionMetas(template.id) };
   }
-  return { template, version, versions: r.templates.listVersionMetas(template.id) };
+  return { template, version, versions: await r.templates.listVersionMetas(template.id) };
 }
 
 export function metaOf(v: TemplateVersion): TemplateVersionMeta {
@@ -60,7 +64,7 @@ export function metaOf(v: TemplateVersion): TemplateVersionMeta {
   return { ...rest, bytes: Buffer.byteLength(html) };
 }
 
-export function createTemplate(input: CreateTemplateInput): { template: Template; version: TemplateVersionMeta } {
+export async function createTemplate(input: CreateTemplateInput): Promise<{ template: Template; version: TemplateVersionMeta }> {
   const name = (input.name ?? '').trim();
   if (!name) throw badRequest('模板名称不能为空');
   if (name.length > 120) throw badRequest('模板名称不能超过 120 个字符');
@@ -70,7 +74,7 @@ export function createTemplate(input: CreateTemplateInput): { template: Template
   const r = repo();
   if (input.categoryId) {
     assertSafeId(input.categoryId, 'category');
-    if (!r.templates.listCategories().some((c) => c.id === input.categoryId)) throw badRequest('分类不存在');
+    if (!(await r.templates.listCategories()).some((c) => c.id === input.categoryId)) throw badRequest('分类不存在');
   }
   const templateId = newId('template');
   const version: TemplateVersion = {
@@ -98,20 +102,20 @@ export function createTemplate(input: CreateTemplateInput): { template: Template
     createdAt: now(),
     updatedAt: now(),
   };
-  r.templates.putVersion(version);
-  r.templates.putTemplate(template);
+  await r.templates.putVersion(version);
+  await r.templates.putTemplate(template);
   return { template, version: metaOf(version) };
 }
 
-export function updateTemplate(id: string, patch: UpdateTemplateInput): Template {
-  return withLockSync(`tpl:${id}`, () => {
-    const t = mustTemplate(id);
+export async function updateTemplate(id: string, patch: UpdateTemplateInput): Promise<Template> {
+  return withLock(`tpl:${id}`, async () => {
+    const t = await mustTemplate(id);
     if (patch.revision !== t.revision) throw conflict('模板已被其他操作修改，请刷新后重试', { currentRevision: t.revision });
     if (patch.name !== undefined && !patch.name.trim()) throw badRequest('模板名称不能为空');
     const r = repo();
     if (patch.categoryId) {
       assertSafeId(patch.categoryId, 'category');
-      if (!r.templates.listCategories().some((c) => c.id === patch.categoryId)) throw badRequest('分类不存在');
+      if (!(await r.templates.listCategories()).some((c) => c.id === patch.categoryId)) throw badRequest('分类不存在');
     }
     const next: Template = {
       ...t,
@@ -124,30 +128,23 @@ export function updateTemplate(id: string, patch: UpdateTemplateInput): Template
       revision: t.revision + 1,
       updatedAt: now(),
     };
-    r.templates.putTemplate(next);
+    await r.templates.putTemplate(next);
     return next;
   });
 }
 
-export function deleteTemplate(id: string): void {
-  const t = mustTemplate(id);
-  const r = repo();
-  r.templates.deleteTemplate(t.id);
-  // 版本文件随模板一起清理，避免孤儿版本被素材引用检查误判
-  for (const m of r.templates.listVersionMetas(t.id)) removeVersionFile(m.id);
+export async function deleteTemplate(id: string): Promise<void> {
+  const t = await mustTemplate(id);
+  // 版本随模板级联清理（各存储实现内部处理），避免孤儿版本被素材引用检查误判
+  await repo().templates.deleteTemplate(t.id);
 }
 
-function removeVersionFile(versionId: string) {
-  // 版本在文件适配器里是独立文件；memory 适配器没有对应文件，删除自然为无操作
-  removeFile(fileOf('versions', versionId));
-}
-
-export function duplicateTemplate(id: string, name?: string): { template: Template; version: TemplateVersionMeta } {
-  const src = mustTemplate(id);
+export async function duplicateTemplate(id: string, name?: string): Promise<{ template: Template; version: TemplateVersionMeta }> {
+  const src = await mustTemplate(id);
   const r = repo();
-  const source = r.templates.getVersion(src.currentVersionId);
+  const source = await r.templates.getVersion(src.currentVersionId);
   if (!source) throw notFound('模板当前版本丢失，无法复制');
-  const copy = createTemplate({
+  const copy = await createTemplate({
     name: (name ?? `${src.name} (副本)`).trim().slice(0, 120),
     categoryId: src.categoryId,
     storeKey: src.storeKey,
@@ -161,27 +158,27 @@ export function duplicateTemplate(id: string, name?: string): { template: Templa
   return copy;
 }
 
-export function listVersions(templateId: string): TemplateVersionMeta[] {
-  mustTemplate(templateId);
+export async function listVersions(templateId: string): Promise<TemplateVersionMeta[]> {
+  await mustTemplate(templateId);
   return repo().templates.listVersionMetas(templateId);
 }
 
-export function getVersion(templateId: string, versionId: string): TemplateVersion {
-  mustTemplate(templateId);
+export async function getVersion(templateId: string, versionId: string): Promise<TemplateVersion> {
+  await mustTemplate(templateId);
   assertSafeId(versionId, 'version');
-  const v = repo().templates.getVersion(versionId);
+  const v = await repo().templates.getVersion(versionId);
   if (!v || v.templateId !== templateId) throw notFound('版本不存在');
   return v;
 }
 
-export function saveVersion(
+export async function saveVersion(
   templateId: string,
   input: { html: string; note?: string; expectedRevision?: number; source?: TemplateVersion['source']; fromVersionId?: string | null },
-): { template: Template; version: TemplateVersionMeta } {
+): Promise<{ template: Template; version: TemplateVersionMeta }> {
   if (typeof input.html !== 'string') throw badRequest('缺少 html');
   if (Buffer.byteLength(input.html) > MAX_HTML_BYTES) throw tooLarge(`模板内容超过 ${Math.round(MAX_HTML_BYTES / 1024)} KB 上限`);
-  return withLockSync(`tpl:${templateId}`, () => {
-    const t = mustTemplate(templateId);
+  return withLock(`tpl:${templateId}`, async () => {
+    const t = await mustTemplate(templateId);
     if (input.expectedRevision !== undefined && input.expectedRevision !== t.revision) {
       throw conflict('模板已被其他操作修改，请刷新后重试', { currentRevision: t.revision });
     }
@@ -196,16 +193,16 @@ export function saveVersion(
       fromVersionId: input.fromVersionId ?? null,
       createdAt: now(),
     };
-    r.templates.putVersion(version);
+    await r.templates.putVersion(version);
     const next: Template = { ...t, currentVersionId: version.id, revision: t.revision + 1, updatedAt: now() };
-    r.templates.putTemplate(next);
+    await r.templates.putTemplate(next);
     return { template: next, version: metaOf(version) };
   });
 }
 
 /** 回滚不改写旧版本，而是把旧内容复制成一个新版本 */
-export function rollbackVersion(templateId: string, versionId: string, expectedRevision?: number): { template: Template; version: TemplateVersionMeta } {
-  const v = getVersion(templateId, versionId);
+export async function rollbackVersion(templateId: string, versionId: string, expectedRevision?: number): Promise<{ template: Template; version: TemplateVersionMeta }> {
+  const v = await getVersion(templateId, versionId);
   return saveVersion(templateId, {
     html: v.html,
     note: `回滚自版本 ${v.id}`,
@@ -215,62 +212,63 @@ export function rollbackVersion(templateId: string, versionId: string, expectedR
   });
 }
 
-export function lintTemplate(templateId: string, html?: string): LintResult {
-  const bundle = html === undefined ? getTemplateBundle(templateId) : null;
+export async function lintTemplate(templateId: string, html?: string): Promise<LintResult> {
+  const bundle = html === undefined ? await getTemplateBundle(templateId) : null;
   const source = html ?? bundle!.version.html;
   if (Buffer.byteLength(source) > MAX_HTML_BYTES) throw tooLarge('模板内容过大');
-  return lintEmailHtml(source, { knownAssetIds: repo().assets.listAssets().map((a) => a.id) });
+  const assets = await repo().assets.listAssets();
+  return lintEmailHtml(source, { knownAssetIds: assets.map((a) => a.id) });
 }
 
 // ---------- 分类 ----------
 
-export function listCategories(): TemplateCategory[] {
+export async function listCategories(): Promise<TemplateCategory[]> {
   return repo().templates.listCategories();
 }
 
-export function upsertCategory(name: string, id?: string): TemplateCategory {
+export async function upsertCategory(name: string, id?: string): Promise<TemplateCategory> {
   const clean = name.trim().slice(0, 60);
   if (!clean) throw badRequest('分类名称不能为空');
   const r = repo();
-  const existing = id ? r.templates.listCategories().find((c) => c.id === id) : r.templates.listCategories().find((c) => c.name === clean);
+  const list = await r.templates.listCategories();
+  const existing = id ? list.find((c) => c.id === id) : list.find((c) => c.name === clean);
   if (existing && id) {
     const next = { ...existing, name: clean };
-    r.templates.putCategory(next);
+    await r.templates.putCategory(next);
     return next;
   }
   if (existing) return existing;
-  const list = r.templates.listCategories();
   const cat: TemplateCategory = { id: id && /^cat_/.test(id) ? id : newId('category'), name: clean, order: list.length, createdAt: now() };
-  r.templates.putCategory(cat);
+  await r.templates.putCategory(cat);
   return cat;
 }
 
-export function deleteCategory(id: string): void {
+export async function deleteCategory(id: string): Promise<void> {
   assertSafeId(id, 'category');
   const r = repo();
-  const cat = r.templates.listCategories().find((c) => c.id === id);
+  const cat = (await r.templates.listCategories()).find((c) => c.id === id);
   if (!cat) throw notFound('分类不存在');
-  const used = r.templates.listTemplates().filter((t) => t.categoryId === id).length;
+  const used = (await r.templates.listTemplates()).filter((t) => t.categoryId === id).length;
   if (used > 0) throw conflict(`该分类下还有 ${used} 个模板，请先移动或删除这些模板`);
-  r.templates.deleteCategory(id);
+  await r.templates.deleteCategory(id);
 }
 
 // ---------- 素材 ----------
 
-export function listAssets(): Asset[] {
+export async function listAssets(): Promise<Asset[]> {
   return repo().assets.listAssets();
 }
 
-export function getAsset(id: string): Asset {
+export async function getAsset(id: string): Promise<Asset> {
   assertSafeId(id, 'asset');
-  const a = repo().assets.getAsset(id);
+  const a = await repo().assets.getAsset(id);
   if (!a) throw notFound('素材不存在');
   return a;
 }
 
-export function readAssetBody(id: string): { asset: Asset; body: Buffer } {
-  const asset = getAsset(id);
-  const body = repo().assets.readAssetBody(id);
+export async function readAssetBody(id: string): Promise<{ asset: Asset; body: Buffer }> {
+  const asset = await getAsset(id);
+  const body = await repo().assets.readAssetBody(id);
   if (!body) throw notFound('素材文件丢失');
   return { asset, body };
 }
@@ -291,7 +289,7 @@ function safeFilename(name: string): string {
     .slice(0, 200);
 }
 
-export function createAsset(input: { filename: string; mime: string; body: Buffer }): { asset: Asset; deduplicated: boolean } {
+export async function createAsset(input: { filename: string; mime: string; body: Buffer }): Promise<{ asset: Asset; deduplicated: boolean }> {
   const mime = normalizeAssetMime(input.mime);
   if (!mime) throw unsupported('仅支持 JPEG / PNG / GIF 图片；请重新选择文件');
   if (input.body.length === 0) throw badRequest('文件内容为空');
@@ -300,7 +298,7 @@ export function createAsset(input: { filename: string; mime: string; body: Buffe
 
   const r = repo();
   const hash = sha256(input.body);
-  const dup = r.assets.listAssets().find((a) => a.hash === hash && a.mime === mime);
+  const dup = (await r.assets.listAssets()).find((a) => a.hash === hash && a.mime === mime);
   if (dup) return { asset: dup, deduplicated: true };
 
   const id = newId('asset');
@@ -314,20 +312,21 @@ export function createAsset(input: { filename: string; mime: string; body: Buffe
     uploaded: null,
     createdAt: now(),
   };
-  r.assets.writeAssetBody(id, input.body);
-  r.assets.putAsset(asset);
+  // 先写二进制、再写元数据；postgres 实现里两者同表，互不覆盖
+  await r.assets.writeAssetBody(id, input.body);
+  await r.assets.putAsset(asset);
   return { asset, deduplicated: false };
 }
 
 export type AssetReference = { templateId: string; templateName: string; versionId: string };
 
-export function assetReferences(assetId: string): AssetReference[] {
+export async function assetReferences(assetId: string): Promise<AssetReference[]> {
   assertSafeId(assetId, 'asset');
   const r = repo();
   const out: AssetReference[] = [];
-  for (const t of r.templates.listTemplates()) {
-    for (const m of r.templates.listVersionMetas(t.id)) {
-      const v = r.templates.getVersion(m.id);
+  for (const t of await r.templates.listTemplates()) {
+    for (const m of await r.templates.listVersionMetas(t.id)) {
+      const v = await r.templates.getVersion(m.id);
       if (!v) continue;
       if (extractLocalAssetIds(v.html).includes(assetId)) out.push({ templateId: t.id, templateName: t.name, versionId: v.id });
     }
@@ -335,13 +334,13 @@ export function assetReferences(assetId: string): AssetReference[] {
   return out;
 }
 
-export function deleteAsset(id: string): void {
-  getAsset(id);
-  const refs = assetReferences(id);
+export async function deleteAsset(id: string): Promise<void> {
+  await getAsset(id);
+  const refs = await assetReferences(id);
   if (refs.length) {
     throw conflict(`该素材仍被 ${refs.length} 个模板版本引用，删除前请先在模板里替换或移除`, { references: refs.slice(0, 20) });
   }
-  repo().assets.deleteAsset(id);
+  await repo().assets.deleteAsset(id);
 }
 
 // ---------- 受众 ----------
@@ -405,8 +404,8 @@ export function exclusionLabel(reason: AudienceExclusionReason): string {
 }
 
 /** 服务端重新读取数据源并计算筛选；不接受浏览器声称的 LTV/标签/订阅状态 */
-export function computeAudience(req: AudienceRequest): Computed {
-  const src = currentSource();
+export async function computeAudience(req: AudienceRequest): Promise<Computed> {
+  const src = await currentSource();
   if (req.mode !== 'ids' && req.mode !== 'filters') throw badRequest('mode 必须是 ids 或 filters');
 
   const filters: Filters = (req.filters ?? {}) as Filters;
@@ -418,18 +417,18 @@ export function computeAudience(req: AudienceRequest): Computed {
   const bump = (r: AudienceExclusionReason, n = 1) => excluded.set(r, (excluded.get(r) ?? 0) + n);
 
   if (req.mode === 'filters') {
+    const tags = await loadTags();
     if (tag && tag !== TAG_NONE) {
-      const known = new Set(Object.values(loadTags()).flat());
+      const known = new Set(Object.values(tags).flat());
       if (!known.has(tag)) throw badRequest('标签不存在');
     }
-    const tags = loadTags();
-    rows = filterCustomers(listCustomers(), filters, { tag, tagOf: tagGetter(tags), query });
+    rows = filterCustomers(await listCustomers(), filters, { tag, tagOf: tagGetter(tags), query });
   } else {
     if (!Array.isArray(req.ids)) throw badRequest('ids 必须是数组');
     if (req.ids.length > 20000) throw badRequest('单次选择的客户数量过多');
     const ids = [...new Set(req.ids.map((v) => String(v)))].filter((v) => /^[A-Za-z0-9_-]{1,64}$/.test(v));
     // 勾选同样要逐个验证 ID 仍属于当前数据源
-    const found = customersByIds(ids);
+    const found = await customersByIds(ids);
     const missing = ids.length - found.filter(Boolean).length;
     if (missing > 0) bump('not_found', missing);
     rows = found.filter((r): r is SourcedCustomer => r !== null);
@@ -462,7 +461,7 @@ export function computeAudience(req: AudienceRequest): Computed {
     candidates.push(r);
   }
 
-  const integrations = repo().integrations.read().klaviyo;
+  const integrations = (await repo().integrations.read()).klaviyo;
   const accountId = integrations.binding.accountId;
   let mailable = 0;
   let pending = 0;
@@ -525,24 +524,24 @@ export function publicPreview(c: Computed): AudiencePreview {
   return rest;
 }
 
-/** 过期很久的快照直接清理，避免目录无限增长（保留 7 天便于复盘） */
+/** 过期很久的快照直接清理，避免表无限增长（保留 7 天便于复盘） */
 const AUDIENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-export function pruneAudiences(): number {
+export async function pruneAudiences(): Promise<number> {
   const cutoff = Date.now() - AUDIENCE_RETENTION_MS;
   let removed = 0;
-  for (const a of repo().audiences.listAudiences()) {
+  for (const a of await repo().audiences.listAudiences()) {
     if (Date.parse(a.expiresAt) < cutoff) {
-      removeFile(fileOf('audiences', a.id));
+      await repo().audiences.deleteAudience(a.id);
       removed++;
     }
   }
   return removed;
 }
 
-export function createAudience(req: AudienceRequest): AudienceSnapshot {
-  pruneAudiences();
-  const c = computeAudience(req);
+export async function createAudience(req: AudienceRequest): Promise<AudienceSnapshot> {
+  await pruneAudiences();
+  const c = await computeAudience(req);
   const counts: AudienceCounts = {
     total: c.total,
     validEmail: c.validEmail,
@@ -566,28 +565,28 @@ export function createAudience(req: AudienceRequest): AudienceSnapshot {
     invalidatedAt: null,
     invalidReason: null,
   };
-  repo().audiences.putAudience(snapshot);
+  await repo().audiences.putAudience(snapshot);
   return snapshot;
 }
 
-export function getAudience(id: string): AudienceSnapshot {
+export async function getAudience(id: string): Promise<AudienceSnapshot> {
   assertSafeId(id, 'audience');
-  const a = repo().audiences.getAudience(id);
+  const a = await repo().audiences.getAudience(id);
   if (!a) throw notFound('受众快照不存在或已过期清理');
   return a;
 }
 
 /** 列表只返回快照本身，不重新计算，也不包含邮箱等 PII */
-export function listAudiencesPublic(): AudienceSnapshot[] {
+export async function listAudiencesPublic(): Promise<AudienceSnapshot[]> {
   return repo().audiences.listAudiences();
 }
 
 export type AudienceValidity = { audience: AudienceSnapshot; valid: boolean; invalidReason: string | null };
 
 /** 数据源、店铺或内容指纹变化时快照立即失效，不能拿昨天的选择去写今天的客户 */
-export function loadAudience(id: string): AudienceValidity {
-  const audience = getAudience(id);
-  const src = currentSource();
+export async function loadAudience(id: string): Promise<AudienceValidity> {
+  const audience = await getAudience(id);
+  const src = await currentSource();
   let invalidReason: string | null = null;
   if (audience.invalidatedAt) invalidReason = audience.invalidReason ?? '快照已被标记失效';
   else if (Date.parse(audience.expiresAt) < Date.now()) invalidReason = '快照已超过 24 小时有效期';
@@ -596,35 +595,35 @@ export function loadAudience(id: string): AudienceValidity {
   return { audience, valid: invalidReason === null, invalidReason };
 }
 
-export function invalidateAudience(id: string, reason: string): AudienceSnapshot {
-  return withLockSync(`aud:${id}`, () => {
-    const a = getAudience(id);
+export async function invalidateAudience(id: string, reason: string): Promise<AudienceSnapshot> {
+  return withLock(`aud:${id}`, async () => {
+    const a = await getAudience(id);
     const next: AudienceSnapshot = { ...a, invalidatedAt: now(), invalidReason: reason.slice(0, 200) };
-    repo().audiences.putAudience(next);
+    await repo().audiences.putAudience(next);
     return next;
   });
 }
 
 // ---------- 邮件准备记录 ----------
 
-export function listPreparations(templateId?: string): Preparation[] {
-  const list = repo().preparations.listPreparations();
+export async function listPreparations(templateId?: string): Promise<Preparation[]> {
+  const list = await repo().preparations.listPreparations();
   return templateId ? list.filter((p) => p.templateId === templateId) : list;
 }
 
-export function getPreparation(id: string): Preparation {
+export async function getPreparation(id: string): Promise<Preparation> {
   assertSafeId(id, 'preparation');
-  const p = repo().preparations.getPreparation(id);
+  const p = await repo().preparations.getPreparation(id);
   if (!p) throw notFound('邮件准备记录不存在');
   return p;
 }
 
-export function createPreparation(input: CreatePreparationInput): Preparation {
-  const template = mustTemplate(input.templateId);
-  const bundle = getTemplateBundle(template.id);
+export async function createPreparation(input: CreatePreparationInput): Promise<Preparation> {
+  const template = await mustTemplate(input.templateId);
+  const bundle = await getTemplateBundle(template.id);
   const versionId = input.versionId ?? bundle.version.id;
-  const version = getVersion(template.id, versionId);
-  const audience = getAudience(input.audienceId);
+  const version = await getVersion(template.id, versionId);
+  const audience = await getAudience(input.audienceId);
   const prep: Preparation = {
     id: newId('preparation'),
     templateId: template.id,
@@ -632,24 +631,24 @@ export function createPreparation(input: CreatePreparationInput): Preparation {
     audienceId: audience.id,
     subject: (input.subject ?? template.subject).slice(0, 200),
     previewText: (input.previewText ?? template.previewText).slice(0, 200),
-    accountId: input.accountId ?? repo().integrations.read().klaviyo.binding.accountId,
+    accountId: input.accountId ?? (await repo().integrations.read()).klaviyo.binding.accountId,
     createdAt: now(),
     updatedAt: now(),
   };
-  repo().preparations.putPreparation(prep);
+  await repo().preparations.putPreparation(prep);
   return prep;
 }
 
 // ---------- 执行记录 ----------
 
-export function createOperation(input: {
+export async function createOperation(input: {
   kind: OperationKind;
   accountId: string | null;
   storeKey: string;
   fingerprint: string;
   summary: string;
   steps?: OperationStep[];
-}): Operation {
+}): Promise<Operation> {
   const op: Operation = {
     id: newId('operation'),
     kind: input.kind,
@@ -664,39 +663,39 @@ export function createOperation(input: {
     createdAt: now(),
     updatedAt: now(),
   };
-  repo().operations.putOperation(op);
+  await repo().operations.putOperation(op);
   return op;
 }
 
-export function getOperation(id: string): Operation {
+export async function getOperation(id: string): Promise<Operation> {
   assertSafeId(id, 'operation');
-  const op = repo().operations.getOperation(id);
+  const op = await repo().operations.getOperation(id);
   if (!op) throw notFound('执行记录不存在');
   return op;
 }
 
-export function listOperations(limit = 50): Operation[] {
-  return repo().operations.listOperations().slice(0, limit);
+export async function listOperations(limit = 50): Promise<Operation[]> {
+  return (await repo().operations.listOperations()).slice(0, limit);
 }
 
-export function appendStep(id: string, step: OperationStep): Operation {
-  return withLockSync(`op:${id}`, () => {
-    const op = getOperation(id);
+export async function appendStep(id: string, step: OperationStep): Promise<Operation> {
+  return withLock(`op:${id}`, async () => {
+    const op = await getOperation(id);
     const next: Operation = { ...op, steps: [...op.steps, step], updatedAt: now() };
-    repo().operations.putOperation(next);
+    await repo().operations.putOperation(next);
     return next;
   });
 }
 
-export function finishOperation(
+export async function finishOperation(
   id: string,
   status: Operation['status'],
   patch: Partial<Pick<Operation, 'resumable' | 'pending' | 'summary'>> = {},
-): Operation {
-  return withLockSync(`op:${id}`, () => {
-    const op = getOperation(id);
+): Promise<Operation> {
+  return withLock(`op:${id}`, async () => {
+    const op = await getOperation(id);
     const next: Operation = { ...op, status, ...patch, updatedAt: now() };
-    repo().operations.putOperation(next);
+    await repo().operations.putOperation(next);
     return next;
   });
 }
@@ -705,96 +704,84 @@ export function step(name: string, status: StepStatus, count: number | null, det
   return { name, status, count, detail: detail.slice(0, 400), at: now() };
 }
 
-export function getBinding(): KlaviyoBinding {
-  return repo().integrations.read().klaviyo.binding;
+export async function getBinding(): Promise<KlaviyoBinding> {
+  return (await repo().integrations.read()).klaviyo.binding;
 }
 
 /** 只读的映射/缓存视图，供只读接口使用 */
-export function getIntegrationState() {
-  const k = repo().integrations.read().klaviyo;
+export async function getIntegrationState() {
+  const k = (await repo().integrations.read()).klaviyo;
   return { binding: k.binding, identities: k.identities, remoteTemplates: k.remoteTemplates, lists: k.lists, marketing: k.marketing };
 }
 
-export function updateBinding(patch: Partial<KlaviyoBinding>): KlaviyoBinding {
-  return withLockSync('integrations', () => {
-    const file = repo().integrations.read();
+export async function updateBinding(patch: Partial<KlaviyoBinding>): Promise<KlaviyoBinding> {
+  return withLock('integrations', async () => {
+    const file = await repo().integrations.read();
     file.klaviyo.binding = { ...file.klaviyo.binding, ...patch };
-    repo().integrations.write(file);
+    await repo().integrations.write(file);
     return file.klaviyo.binding;
   });
 }
 
 /** 账号或店铺变化时，旧的远端映射与状态缓存不再可信 */
-export function resetMappings(reason: string): void {
-  withLockSync('integrations', () => {
-    const file = repo().integrations.read();
+export async function resetMappings(reason: string): Promise<void> {
+  await withLock('integrations', async () => {
+    const file = await repo().integrations.read();
     file.klaviyo.identities = {};
     file.klaviyo.marketing = {};
     file.klaviyo.remoteTemplates = {};
-    repo().integrations.write(file);
+    await repo().integrations.write(file);
     void reason;
   });
 }
 
-export function cacheLists(lists: KlaviyoListRecord[]): void {
-  withLockSync('integrations', () => {
-    const file = repo().integrations.read();
+export async function cacheLists(lists: KlaviyoListRecord[]): Promise<void> {
+  await withLock('integrations', async () => {
+    const file = await repo().integrations.read();
     file.klaviyo.lists = lists;
-    repo().integrations.write(file);
+    await repo().integrations.write(file);
   });
 }
 
-export function cacheIdentities(
+export async function cacheIdentities(
   entries: { key: string; identity: KlaviyoIdentity; status?: KlaviyoMarketingStatus }[],
-): void {
-  withLockSync('integrations', () => {
-    const file = repo().integrations.read();
+): Promise<void> {
+  await withLock('integrations', async () => {
+    const file = await repo().integrations.read();
     for (const e of entries) {
       file.klaviyo.identities[e.key] = e.identity;
       // 只在真的查到状态时覆盖：资料写入途中不能把已知的订阅状态抹成未知
       if (e.status) file.klaviyo.marketing[e.key] = e.status;
     }
-    repo().integrations.write(file);
+    await repo().integrations.write(file);
   });
 }
 
-export function recordAssetUpload(assetId: string, url: string, accountId: string): Asset {
-  return withLockSync(`asset:${assetId}`, () => {
-    const a = getAsset(assetId);
+export async function recordAssetUpload(assetId: string, url: string, accountId: string): Promise<Asset> {
+  return withLock(`asset:${assetId}`, async () => {
+    const a = await getAsset(assetId);
     const next: Asset = { ...a, uploaded: { accountId, url, uploadedAt: now() } };
-    repo().assets.putAsset(next);
+    await repo().assets.putAsset(next);
     return next;
   });
 }
 
-export function cacheRemoteTemplate(templateId: string, record: import('./types').RemoteTemplateRecord): void {
-  withLockSync('integrations', () => {
-    const file = repo().integrations.read();
+export async function cacheRemoteTemplate(templateId: string, record: import('./types').RemoteTemplateRecord): Promise<void> {
+  await withLock('integrations', async () => {
+    const file = await repo().integrations.read();
     file.klaviyo.remoteTemplates[templateId] = record;
-    repo().integrations.write(file);
+    await repo().integrations.write(file);
   });
 }
 
 /** 记录模板与远端模板的绑定（推送成功后） */
-export function bindRemoteTemplate(templateId: string, link: import('./types').RemoteTemplateLink): Template {
-  return withLockSync(`tpl:${templateId}`, () => {
-    const t = mustTemplate(templateId);
+export async function bindRemoteTemplate(templateId: string, link: import('./types').RemoteTemplateLink): Promise<Template> {
+  return withLock(`tpl:${templateId}`, async () => {
+    const t = await mustTemplate(templateId);
     const next: Template = { ...t, remote: link, revision: t.revision + 1, updatedAt: now() };
-    repo().templates.putTemplate(next);
+    await repo().templates.putTemplate(next);
     return next;
   });
-}
-
-// ---------- 读改写原子性 ----------
-
-/**
- * 模板、素材、受众、执行记录的读改写全部是同步 fs 调用，中间没有 await，
- * 因此 Node 单线程下整段天然不可被打断，不需要额外加锁。
- * 保留这个包装是为了标记「这段必须保持同步」：一旦引入 await，
- * 就必须改用 storage.withLock 的异步队列，否则并发写会互相覆盖。
- */
-function withLockSync<T>(_key: string, fn: () => T): T {
-  return fn();
 }
 
 // ---------- 起始模板 ----------

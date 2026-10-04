@@ -20,11 +20,11 @@ export type WriteContext = {
   operator: { subject: string; via: string };
 };
 
-export function requireWrite(req: Request, opts: { customerData: boolean }): WriteContext {
+export async function requireWrite(req: Request, opts: { customerData: boolean }): Promise<WriteContext> {
   const op = requireOpsAccess(req, { write: true });
   if (!op.ok) throw new ServiceError(op.code, op.reason, op.code === 'unauthorized' ? 401 : 403);
 
-  const binding = getBinding();
+  const binding = await getBinding();
   const cfg = klaviyoConfig();
   if (!cfg) throw new ServiceError('writes_disabled', '未配置 KLAVIYO_PRIVATE_API_KEY，真实写入不可用', 403);
   if (!cfg.writesEnabled) {
@@ -47,12 +47,12 @@ export function requireOperator(req: Request): void {
 }
 
 /** 只读的 Klaviyo 调用（不涉及写入开关），但仍要求已验证操作员，避免用私钥为匿名请求服务 */
-export function requireRead(req: Request): { cfg: KlaviyoConfig; accountId: string | null; storeKey: string } {
+export async function requireRead(req: Request): Promise<{ cfg: KlaviyoConfig; accountId: string | null; storeKey: string }> {
   const op = requireOpsAccess(req, { write: false });
   if (!op.ok) throw new ServiceError(op.code, op.reason, op.code === 'unauthorized' ? 401 : 403);
   const cfg = klaviyoConfig();
   if (!cfg) throw new ServiceError('unavailable', '未配置 KLAVIYO_PRIVATE_API_KEY，无法访问 Klaviyo', 503, false);
-  const binding = getBinding();
+  const binding = await getBinding();
   return { cfg, accountId: binding.accountId, storeKey: binding.storeKey };
 }
 

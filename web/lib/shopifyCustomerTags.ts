@@ -6,6 +6,16 @@ import { shopifyConfig, type ShopifyConfig } from '@/lib/shopifyFulfill';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MAX_TAG = 255;
 
+// 标签读取的短期缓存：客户/用户页每次加载都会按同一批 id 读取远端标签，
+// 缓存后重复切页不再打 Admin API（默认 60s，可用 SHOPIFY_TAGS_CACHE_MS 调整）。
+const TAGS_TTL_MS = Number(process.env.SHOPIFY_TAGS_CACHE_MS) || 60_000;
+const tagsCache = new Map<string, { at: number; data: Record<string, string[]> }>();
+
+/** 本地写标签后调用，避免其后短时间内的读取拿到旧值。 */
+export function clearShopifyTagsCache(): void {
+  tagsCache.clear();
+}
+
 export type ShopifyTagSync = {
   configured: boolean;
   synced: boolean;
@@ -32,9 +42,14 @@ async function gql(cfg: ShopifyConfig, query: string, variables: Record<string, 
   return json.data;
 }
 
-/** 查询客户现有 Shopify tags，供本地标签 API 合并使用。 */
-export async function fetchShopifyCustomerTags(ids: string[]): Promise<Record<string, string[]>> {
-  const cfg = shopifyConfig();
+/** 查询客户现有 Shopify tags，供本地标签 API 合并使用。
+ *  opts.fresh=true 时绕过缓存（POST 写回前需要最新值）。 */
+export async function fetchShopifyCustomerTags(ids: string[], opts: { fresh?: boolean } = {}): Promise<Record<string, string[]>> {
+  const cacheKey = [...ids].sort().join(',');
+  const hit = tagsCache.get(cacheKey);
+  if (!opts.fresh && hit && Date.now() - hit.at < TAGS_TTL_MS) return hit.data;
+
+  const cfg = await shopifyConfig();
   if (!cfg) return {};
   const pairs = ids.map((id) => [id, gid(id)] as const).filter((x): x is readonly [string, string] => !!x[1]);
   const out: Record<string, string[]> = {};
@@ -50,6 +65,7 @@ export async function fetchShopifyCustomerTags(ids: string[]): Promise<Record<st
       if (node?.id) out[chunk[n][0]] = Array.isArray(node.tags) ? node.tags.map(String) : [];
     });
   }
+  tagsCache.set(cacheKey, { at: Date.now(), data: out });
   return out;
 }
 
@@ -58,7 +74,7 @@ export async function fetchShopifyCustomerTags(ids: string[]): Promise<Record<st
  * tagsAdd / tagsRemove 支持批量对象；这里逐客户执行是为了让本地 store 和远端精确收敛，并返回失败的客户。
  */
 export async function syncCustomerTagsToShopify(nextById: Record<string, string[]>): Promise<ShopifyTagSync> {
-  const cfg = shopifyConfig();
+  const cfg = await shopifyConfig();
   if (!cfg) return { configured: false, synced: false, reason: 'Shopify 未配置，标签只保存到本地' };
   const entries = Object.entries(nextById)
     .map(([id, tags]) => ({ id, gid: gid(id), tags: [...new Set(tags.map((x) => x.trim()).filter(Boolean))].slice(0, 250).map((x) => x.slice(0, MAX_TAG)) }))

@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string; versionId: string }> }) {
   try {
     const { id, versionId } = await ctx.params;
-    return NextResponse.json({ version: getVersion(id, versionId) });
+    return NextResponse.json({ version: await getVersion(id, versionId) });
   } catch (e) {
     return errorResponse(e);
   }

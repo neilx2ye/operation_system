@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { orderDetail } from '@/lib/mock';
+import { readShipments, replaceAllShipments } from '@/lib/db/docs';
 import { createYuntuOrder, yuntuConfig } from '@/lib/yuntu';
 import { pushTrackingToShopify, shopifyConfig } from '@/lib/shopifyFulfill';
 import { yuntuReady, shopifyReady, loadSettings } from '@/lib/settings';
@@ -22,19 +21,12 @@ type Shipment = {
   shopifySkipped?: boolean;
 };
 
-const FILE = path.join(process.cwd(), 'data', 'shipments.json');
-
 async function load(): Promise<Record<string, Shipment>> {
-  try {
-    return JSON.parse(await fs.readFile(FILE, 'utf8'));
-  } catch {
-    return {};
-  }
+  return (await readShipments()) as Record<string, Shipment>;
 }
 
-async function save(all: Record<string, Shipment>) {
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, JSON.stringify(all, null, 2));
+async function save(all: Record<string, Shipment>): Promise<void> {
+  await replaceAllShipments(all);
 }
 
 const norm = (id: string) => (id.startsWith('#') ? id : '#' + id);
@@ -42,8 +34,9 @@ const norm = (id: string) => (id.startsWith('#') ? id : '#' + id);
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get('id');
   const all = await load();
-  const ready = { yuntu: yuntuReady(), shopify: shopifyReady() };
-  const y = loadSettings().yuntu;
+  const st = await loadSettings();
+  const ready = { yuntu: yuntuReady(st), shopify: shopifyReady(st) };
+  const y = st.yuntu;
   const defaults = { channelCode: y.channelCode, unitWeightKg: Number(y.unitWeightKg) || 0.3 };
   if (id) return NextResponse.json({ shipment: all[norm(id)] ?? null, ready, defaults });
   return NextResponse.json({ shipments: all, ready });
@@ -53,7 +46,7 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as { id?: string; notifyCustomer?: boolean; retryShopifyOnly?: boolean; manual?: ManualOrder };
   if (!body.id) return NextResponse.json({ error: '缺少订单号' }, { status: 400 });
   const id = norm(body.id);
-  const detail = orderDetail(id);
+  const detail = await orderDetail(id);
   if (!detail) return NextResponse.json({ error: '订单不存在' }, { status: 404 });
   if (detail.status === '已退款') return NextResponse.json({ error: '订单已全额退款,不能发货' }, { status: 409 });
 
@@ -64,8 +57,8 @@ export async function POST(req: Request) {
 
   const all = await load();
   let rec = all[id];
-  const ycfg = yuntuConfig();
-  const scfg = shopifyConfig();
+  const ycfg = await yuntuConfig();
+  const scfg = await shopifyConfig();
   const dryRun = !ycfg;
 
   // 幂等: 已在云途建过单的订单不再重复创建,只允许重试同步 Shopify
